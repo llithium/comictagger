@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from comicapi.genericmetadata import GenericMetadata
@@ -11,6 +13,10 @@ def rename(metadata: GenericMetadata, *, long_special_versions: bool = False) ->
     renamer.set_metadata(metadata, "original.cbz")
     renamer.set_kapowarr_naming(enabled=True, long_special_versions=long_special_versions)
     return renamer.determine_name(".cbz")
+
+
+def assert_renamed_name(actual: str, expected: str) -> None:
+    assert pathlib.PureWindowsPath(actual) == pathlib.PureWindowsPath(expected)
 
 
 def test_kapowarr_regular_issue_uses_the_configured_library_layout() -> None:
@@ -25,9 +31,10 @@ def test_kapowarr_regular_issue_uses_the_configured_library_layout() -> None:
         format="Series",
     )
 
-    assert rename(metadata) == (
+    assert_renamed_name(
+        rename(metadata),
         "DC Comics/The World's Finest - Batman-Superman/Volume 01 (2025)/"
-        "The World's Finest - Batman-Superman (2025) Volume 01 Issue 007.cbz"
+        "The World's Finest - Batman-Superman (2025) Volume 01 Issue 007.cbz",
     )
 
 
@@ -41,9 +48,10 @@ def test_kapowarr_special_versions_use_their_own_template() -> None:
         format="Hardcover",
     )
 
-    assert rename(metadata) == "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 HC.cbz"
-    assert rename(metadata, long_special_versions=True) == (
-        "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 Hard-Cover.cbz"
+    assert_renamed_name(rename(metadata), "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 HC.cbz")
+    assert_renamed_name(
+        rename(metadata, long_special_versions=True),
+        "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 Hard-Cover.cbz",
     )
 
 
@@ -58,7 +66,7 @@ def test_kapowarr_volume_as_issue_uses_the_issue_number_without_padding() -> Non
         format="Volume As Issue",
     )
 
-    assert rename(metadata) == "Image/Saga/Volume 01 (2026)/Saga (2026) Volume 12.cbz"
+    assert_renamed_name(rename(metadata), "Image/Saga/Volume 01 (2026)/Saga (2026) Volume 12.cbz")
 
 
 def test_kapowarr_template_aliases_are_available_without_enabling_the_profile() -> None:
@@ -70,7 +78,7 @@ def test_kapowarr_template_aliases_are_available_without_enabling_the_profile() 
         "{clean_series_name}/Volume {volume_number} ({year})/{series_name} {issue_number} {issue_title}"
     )
 
-    assert renamer.determine_name(".cbz") == "Question, The/Volume 03 (1987)/The Question 005 Riddles.cbz"
+    assert_renamed_name(renamer.determine_name(".cbz"), "Question, The/Volume 03 (1987)/The Question 005 Riddles.cbz")
 
 
 def test_kapowarr_profile_rejects_only_move_to_avoid_an_unexpected_layout() -> None:

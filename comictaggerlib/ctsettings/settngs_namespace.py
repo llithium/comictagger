@@ -102,6 +102,8 @@ class SettngsNS(settngs.TypedNS):
     File_Rename__move: bool
     File_Rename__only_move: bool
     File_Rename__strict_filenames: bool
+    File_Rename__kapowarr_naming: bool
+    File_Rename__kapowarr_long_special_versions: bool
     File_Rename__replacements: comictaggerlib.defaults.Replacements
 
     Auto_Tag__online: bool
