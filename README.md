@@ -107,10 +107,10 @@ winget install ComicTagger.ComicTagger
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/fcanc">
-            <img src="https://avatars.githubusercontent.com/u/4999486?v=4" width="100;" alt="fcanc"/>
+        <a href="https://github.com/llithium">
+            <img src="https://avatars.githubusercontent.com/u/141888591?v=4" width="100;" alt="llithium"/>
             <br />
-            <sub><b>fcanc</b></sub>
+            <sub><b>llithium</b></sub>
         </a>
     </td>
     <td align="center">
@@ -135,6 +135,13 @@ winget install ComicTagger.ComicTagger
         </a>
     </td></tr>
 <tr>
+    <td align="center">
+        <a href="https://github.com/fcanc">
+            <img src="https://avatars.githubusercontent.com/u/4999486?v=4" width="100;" alt="fcanc"/>
+            <br />
+            <sub><b>fcanc</b></sub>
+        </a>
+    </td>
     <td align="center">
         <a href="https://github.com/abuchanan920">
             <img src="https://avatars.githubusercontent.com/u/368793?v=4" width="100;" alt="abuchanan920"/>
@@ -169,15 +176,15 @@ winget install ComicTagger.ComicTagger
             <br />
             <sub><b>kiryl85</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/rhaussmann">
             <img src="https://avatars.githubusercontent.com/u/7084007?v=4" width="100;" alt="rhaussmann"/>
             <br />
             <sub><b>rhaussmann</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/AlbanSeurat">
             <img src="https://avatars.githubusercontent.com/u/500180?v=4" width="100;" alt="AlbanSeurat"/>
@@ -212,15 +219,15 @@ winget install ComicTagger.ComicTagger
             <br />
             <sub><b>jbcpollak</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/PawlakMarek">
             <img src="https://avatars.githubusercontent.com/u/26022173?v=4" width="100;" alt="PawlakMarek"/>
             <br />
             <sub><b>PawlakMarek</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/DrMcCoy">
             <img src="https://avatars.githubusercontent.com/u/156130?v=4" width="100;" alt="DrMcCoy"/>
