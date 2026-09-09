@@ -72,7 +72,7 @@ jobs:
 
       - name: Install linux dependencies
         run: |
-          sudo apt-get update && sudo apt-get upgrade && sudo apt-get install pkg-config libicu-dev libqt6gui6 libfuse2 desktop-file-utils
+          sudo apt-get update && sudo apt-get upgrade && sudo apt-get install pkg-config libicu-dev libqt6gui6 libfuse2 desktop-file-utils xvfb xauth
         if: runner.os == 'Linux'
 
       - name: Build and install PyPi packages
@@ -97,10 +97,16 @@ jobs:
           retention-days: 90
         if: matrix.python-version == 3.14
 
+      - name: PyTest (Linux)
+        run: |
+          export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
+          xvfb-run -a python -m tox p
+        shell: bash
+        if: runner.os == 'Linux'
+
       - name: PyTest
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
           python -m tox p
         shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
+        if: runner.os != 'Linux'
