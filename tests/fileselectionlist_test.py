@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import shutil
 
-from PyQt6.QtWidgets import QApplication
+import pytest
+
+QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
 from comictaggerlib.fileselectionlist import FileSelectionList
 from testing.filenames import cbz_path
 
 
 def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:
-    application = QApplication.instance() or QApplication([])
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     source_path = source_dir / cbz_path.name
