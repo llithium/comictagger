@@ -239,6 +239,8 @@ class File_Rename(typing.TypedDict):
     move: bool
     only_move: bool
     strict_filenames: bool
+    kapowarr_naming: bool
+    kapowarr_long_special_versions: bool
     replacements: comictaggerlib.defaults.Replacements
 
 

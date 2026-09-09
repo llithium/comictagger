@@ -31,6 +31,17 @@ ComicTagger is a **multi-platform** app for **writing metadata to digital comics
 
 For details, screen-shots, and more, visit [the Wiki](https://github.com/comictagger/comictagger/wiki)
 
+### Kapowarr-compatible renaming
+
+This fork can place tagged files using Kapowarr's default media-management rules:
+
+```text
+{publisher}/{series_name}/Volume {volume_number} ({year})/
+{series_name} ({year}) Volume {volume_number} Issue {issue_number}
+```
+
+In **Preferences → Rename**, enable **Use Kapowarr-compatible naming and folders**, set **Destination Directory** to the Kapowarr library root, then review the rename preview before applying it. The profile uses embedded ComicInfo metadata, including the `Format` field for TPB, one-shot, hardcover, omnibus, and Volume-As-Issue names; it does not query or alter a Kapowarr database. The equivalent CLI option is `--kapowarr-naming --dir /path/to/library-root`. It cannot be combined with `--only-move`.
+
 
 ## Installation
 

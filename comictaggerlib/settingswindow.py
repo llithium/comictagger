@@ -274,6 +274,8 @@ class SettingsWindow(QtWidgets.QDialog):
         self.cbxRenameStrict.clicked.connect(self.rename_test)
         self.cbxSmartCleanup.clicked.connect(self.rename_test)
         self.cbxChangeExtension.clicked.connect(self.rename_test)
+        self.cbxKapowarrNaming.clicked.connect(self.kapowarr_naming_clicked)
+        self.cbxKapowarrLongSpecialVersions.clicked.connect(self.rename_test)
         self.leIssueNumPadding.textEdited.connect(self.rename_test)
         self.twLiteralReplacements.cellChanged.connect(self.rename_test)
         self.twValueReplacements.cellChanged.connect(self.rename_test)
@@ -297,6 +299,8 @@ class SettingsWindow(QtWidgets.QDialog):
         self.btnResetSettings.clicked.disconnect()
         self.btnTemplateHelp.clicked.disconnect()
         self.cbxChangeExtension.clicked.disconnect()
+        self.cbxKapowarrNaming.clicked.disconnect()
+        self.cbxKapowarrLongSpecialVersions.clicked.disconnect()
         self.cbFilenameParser.currentIndexChanged.disconnect()
         self.cbxMoveFiles.clicked.disconnect()
         self.cbxMoveOnly.clicked.disconnect()
@@ -396,10 +400,18 @@ class SettingsWindow(QtWidgets.QDialog):
             self.cbxMoveFiles.setEnabled(True)
         self.dir_test()
 
+    def kapowarr_naming_clicked(self, *args: Any, **kwargs: Any) -> None:
+        enabled = self.cbxKapowarrNaming.isChecked()
+        self.cbxMoveOnly.setEnabled(not enabled)
+        if enabled:
+            self.cbxMoveOnly.setChecked(False)
+        self.dir_test()
+        self.rename_test()
+
     def dir_test(self) -> None:
         self.lblDir.setText(
             str(pathlib.Path(self.leDirectory.text().strip()).resolve())
-            if self.cbxMoveFiles.isChecked() or self.cbxMoveOnly.isChecked()
+            if self.cbxMoveFiles.isChecked() or self.cbxMoveOnly.isChecked() or self.cbxKapowarrNaming.isChecked()
             else ""
         )
 
@@ -429,10 +441,11 @@ class SettingsWindow(QtWidgets.QDialog):
 
         fr.set_metadata(metadata, name)
         fr.move_only = self.cbxMoveOnly.isChecked()
-        fr.move = self.cbxMoveFiles.isChecked()
+        fr.move = self.cbxMoveFiles.isChecked() or self.cbxKapowarrNaming.isChecked()
         fr.set_template(template)
         fr.set_issue_zero_padding(int(self.leIssueNumPadding.text()))
         fr.set_smart_cleanup(self.cbxSmartCleanup.isChecked())
+        fr.set_kapowarr_naming(self.cbxKapowarrNaming.isChecked(), self.cbxKapowarrLongSpecialVersions.isChecked())
         try:
             new_filename = fr.determine_name(".cbz")
             new_text = "<pre>"
@@ -529,6 +542,9 @@ class SettingsWindow(QtWidgets.QDialog):
         self.cbxMoveOnly.setChecked(self.config[0].File_Rename__only_move)
         self.leDirectory.setText(self.config[0].File_Rename__dir)
         self.cbxRenameStrict.setChecked(self.config[0].File_Rename__strict_filenames)
+        self.cbxKapowarrNaming.setChecked(self.config[0].File_Rename__kapowarr_naming)
+        self.cbxKapowarrLongSpecialVersions.setChecked(self.config[0].File_Rename__kapowarr_long_special_versions)
+        self.cbxMoveOnly.setEnabled(not self.cbxKapowarrNaming.isChecked())
 
         for table, replacments in zip(
             (self.twLiteralReplacements, self.twValueReplacements), self.config[0].File_Rename__replacements
@@ -673,6 +689,8 @@ class SettingsWindow(QtWidgets.QDialog):
         self.config[0].File_Rename__dir = self.leDirectory.text()
 
         self.config[0].File_Rename__strict_filenames = self.cbxRenameStrict.isChecked()
+        self.config[0].File_Rename__kapowarr_naming = self.cbxKapowarrNaming.isChecked()
+        self.config[0].File_Rename__kapowarr_long_special_versions = self.cbxKapowarrLongSpecialVersions.isChecked()
         self.config[0].File_Rename__replacements = self.get_replacements()
 
         # Read settings from talker tabs

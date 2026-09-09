@@ -244,6 +244,21 @@ def rename(parser: settngs.Manager) -> None:
         action=argparse.BooleanOptionalAction,
         help="Ensures that filenames are valid for all OSs.\ndefault: %(default)s",
     )
+    parser.add_setting(
+        "--kapowarr-naming",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Use Kapowarr's stock publisher/series/volume folder layout and filename rules. "
+            "Set --dir to the library root. Cannot be combined with --only-move.\ndefault: %(default)s"
+        ),
+    )
+    parser.add_setting(
+        "--kapowarr-long-special-versions",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Use Kapowarr labels such as One-Shot and Hard-Cover instead of OS and HC.\ndefault: %(default)s",
+    )
     parser.add_setting("replacements", default=DEFAULT_REPLACEMENTS, cmdline=False)
 
 

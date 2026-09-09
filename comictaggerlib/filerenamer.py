@@ -40,6 +40,29 @@ logger = logging.getLogger(__name__)
 STANDARD_CREDIT_ROLES = ("writer", "penciller", "inker", "colorist", "letterer", "cover artist", "editor", "translator")
 
 
+# These are Kapowarr's stock media-management formats.  Keeping them here,
+# rather than duplicating a second formatter, means preview, GUI and CLI all
+# use the same naming and filesystem-safety path.
+KAPOWARR_VOLUME_FOLDER_TEMPLATE = "{publisher}/{series_name}/Volume {volume_number} ({year})"
+KAPOWARR_FILE_TEMPLATE = "{series_name} ({year}) Volume {volume_number} Issue {issue_number}"
+KAPOWARR_SPECIAL_TEMPLATE = "{series_name} ({year}) Volume {volume_number} {special_version}"
+KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE = "{series_name} ({year}) Volume {issue_number}"
+
+KAPOWARR_SPECIAL_VERSIONS = {
+    "tpb": ("TPB", "TPB"),
+    "trade paperback": ("TPB", "TPB"),
+    "one shot": ("OS", "One-Shot"),
+    "one-shot": ("OS", "One-Shot"),
+    "os": ("OS", "One-Shot"),
+    "hard cover": ("HC", "Hard-Cover"),
+    "hard-cover": ("HC", "Hard-Cover"),
+    "hardcover": ("HC", "Hard-Cover"),
+    "hc": ("HC", "Hard-Cover"),
+    "omnibus": ("Omnibus", "Omnibus"),
+}
+KAPOWARR_VOLUME_AS_ISSUE_FORMATS = {"vai", "volume as issue", "volume-as-issue"}
+
+
 def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> pathlib.Path:
     folder = ca.path.parent.absolute()
     if rename_dir is not None:
@@ -312,6 +335,8 @@ class FileRenamer:
         self.original_name = ""
         self.move_only = False
         self.warnings: list[str] = []
+        self.kapowarr_naming = False
+        self.kapowarr_long_special_versions = False
 
     def set_metadata(self, metadata: GenericMetadata, original_name: str) -> None:
         self.metadata = metadata
@@ -326,6 +351,59 @@ class FileRenamer:
     def set_template(self, template: str) -> None:
         self.template = template
 
+    def set_kapowarr_naming(self, enabled: bool, long_special_versions: bool = False) -> None:
+        """Enable Kapowarr's stock library layout and filename rules.
+
+        The profile deliberately only uses embedded ComicInfo metadata.  It
+        never queries or changes a Kapowarr database, so it is safe for files
+        that have not been imported into Kapowarr yet.
+        """
+        self.kapowarr_naming = enabled
+        self.kapowarr_long_special_versions = long_special_versions
+
+    @staticmethod
+    def _clean_series_name(series: str | None) -> str | None:
+        if not series:
+            return series
+        for prefix in ("The ", "A "):
+            if series.startswith(prefix):
+                return f"{series[len(prefix):]}, {prefix.strip()}"
+        return series
+
+    def _kapowarr_values(self, md: GenericMetadata) -> dict[str, Any]:
+        issue = IssueString(md.issue).as_string(pad=self.issue_zero_padding)
+        issue_release_date = None
+        if md.year is not None and md.month is not None and md.day is not None:
+            issue_release_date = f"{md.year:04d}-{md.month:02d}-{md.day:02d}"
+
+        return {
+            "series_name": md.series,
+            "clean_series_name": self._clean_series_name(md.series),
+            "volume_number": str(md.volume).zfill(2) if md.volume is not None else None,
+            "comicvine_id": md.series_id,
+            "issue_comicvine_id": md.issue_id,
+            "issue_number": issue,
+            "issue_release_date": issue_release_date,
+            "issue_release_year": md.year,
+            "issue_title": md.title,
+            "special_version": None,
+        }
+
+    def _kapowarr_template(self, md: GenericMetadata, values: dict[str, Any]) -> str:
+        comic_format = (md.format or "").strip().casefold()
+        if comic_format in KAPOWARR_VOLUME_AS_ISSUE_FORMATS:
+            # Kapowarr's Volume-As-Issue template intentionally uses the
+            # unpadded number; it represents a collected volume, not an issue.
+            values["issue_number"] = md.issue
+            return KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE
+
+        if comic_format in KAPOWARR_SPECIAL_VERSIONS:
+            short, long = KAPOWARR_SPECIAL_VERSIONS[comic_format]
+            values["special_version"] = long if self.kapowarr_long_special_versions else short
+            return KAPOWARR_SPECIAL_TEMPLATE
+
+        return KAPOWARR_FILE_TEMPLATE
+
     def determine_name(self, ext: str) -> str:
         class Default(dict[str, Any]):
             def __missing__(self, key: str) -> str | None:
@@ -336,6 +414,9 @@ class FileRenamer:
 
         self.warnings.clear()
 
+        if self.kapowarr_naming and self.move_only:
+            raise ValueError("Kapowarr-compatible naming cannot be combined with Only Move")
+
         md = self.metadata
 
         template = self.template
@@ -343,7 +424,7 @@ class FileRenamer:
         new_name = ""
 
         fmt = MetadataFormatter(self.smart_cleanup, platform=self.platform, replacements=self.replacements)
-        md_dict = vars(md)
+        md_dict = dict(vars(md))
         md_dict.update(
             dict(
                 month_name=None,
@@ -360,6 +441,10 @@ class FileRenamer:
         )
 
         md_dict["issue"] = IssueString(md.issue).as_string(pad=self.issue_zero_padding)
+        # Kapowarr names can also be used as ordinary ComicTagger templates.
+        # This makes it possible to customise the profile without forking the
+        # formatter a second time.
+        md_dict.update(self._kapowarr_values(md))
 
         if (isinstance(md.month, int) or isinstance(md.month, str) and md.month.isdigit()) and 0 < int(md.month) < 13:
             md_dict["month_name"] = calendar.month_name[int(md.month)]
@@ -401,6 +486,19 @@ class FileRenamer:
                 md_dict[f"credit_{role}"] = None
                 md_dict[f"credit_item_{role}"] = None
 
+        if self.kapowarr_naming:
+            # Kapowarr substitutes these labels instead of silently creating
+            # blank path components when incomplete tags are previewed.
+            md_dict.update(
+                {
+                    "series_name": md_dict["series_name"] or "Unknown",
+                    "publisher": md_dict["publisher"] or "Unknown Publisher",
+                    "year": md_dict["year"] if md_dict["year"] is not None else "Unknown Year",
+                    "volume_number": md_dict["volume_number"] or "Unknown",
+                }
+            )
+            template = f"{KAPOWARR_VOLUME_FOLDER_TEMPLATE}/{self._kapowarr_template(md, md_dict)}"
+
         new_basename = ""
         for component in pathlib.PureWindowsPath(template).parts:
             new_component = fmt.vformat(component, args=[], kwargs=Default(md_dict))
@@ -411,6 +509,6 @@ class FileRenamer:
         if self.move_only:
             new_folder = os.path.join(new_name, os.path.splitext(self.original_name)[0])
             return new_folder + ext
-        if self.move:
+        if self.move or self.kapowarr_naming:
             return new_name.strip() + ext
         return new_basename.strip() + ext

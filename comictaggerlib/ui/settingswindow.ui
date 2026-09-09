@@ -1069,6 +1069,26 @@ Example Merge:
              </property>
             </widget>
            </item>
+           <item row="6" column="0" colspan="2">
+            <widget class="QCheckBox" name="cbxKapowarrNaming">
+             <property name="toolTip">
+              <string>Uses Kapowarr's default Publisher/Series/Volume folder layout and its normal, special-version, and Volume-As-Issue filename rules. Set Destination Directory to the library root. The preview is always shown before files are changed. This cannot be combined with Only Move.</string>
+             </property>
+             <property name="text">
+              <string>Use Kapowarr-compatible naming and folders</string>
+             </property>
+            </widget>
+           </item>
+           <item row="10" column="0" colspan="2">
+            <widget class="QCheckBox" name="cbxKapowarrLongSpecialVersions">
+             <property name="toolTip">
+              <string>When Kapowarr-compatible naming is enabled, use labels such as One-Shot and Hard-Cover instead of OS and HC.</string>
+             </property>
+             <property name="text">
+              <string>Use long Kapowarr special-version labels</string>
+             </property>
+            </widget>
+           </item>
            <item row="7" column="0">
             <widget class="QCheckBox" name="cbxMoveFiles">
              <property name="toolTip">

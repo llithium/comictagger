@@ -89,6 +89,10 @@ class RenameWindow(QtWidgets.QDialog):
         self.renamer.set_smart_cleanup(self.config[0].File_Rename__use_smart_string_cleanup)
         self.renamer.replacements = self.config[0].File_Rename__replacements
         self.renamer.move_only = self.config[0].File_Rename__only_move
+        self.renamer.set_kapowarr_naming(
+            self.config[0].File_Rename__kapowarr_naming,
+            self.config[0].File_Rename__kapowarr_long_special_versions,
+        )
         error = None
 
         new_ext = ca.path.suffix  # default
@@ -113,11 +117,19 @@ class RenameWindow(QtWidgets.QDialog):
                     self.config[0].Filename_Parsing__remove_publisher,
                 )
         self.renamer.set_metadata(md, ca.path.name)
-        self.renamer.move = self.config[0].File_Rename__move
+        self.renamer.move = self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
         return new_ext, error
 
     def do_preview(self) -> None:
         self.twList.setRowCount(0)
+
+        if self.config[0].File_Rename__kapowarr_naming and not self.config[0].File_Rename__dir.strip():
+            OptionalMessageDialog.warning(
+                self,
+                "Kapowarr library root required",
+                "Set Destination Directory to the Kapowarr library root before previewing compatible renames.",
+            )
+            return
 
         self.twList.setSortingEnabled(False)
 
@@ -155,7 +167,11 @@ class RenameWindow(QtWidgets.QDialog):
 
             folder = get_rename_dir(
                 ca,
-                self.config[0].File_Rename__dir if self.config[0].File_Rename__move else None,
+                (
+                    self.config[0].File_Rename__dir
+                    if self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
+                    else None
+                ),
             )
 
             row = self.twList.rowCount()
@@ -212,6 +228,14 @@ class RenameWindow(QtWidgets.QDialog):
         self.do_preview()
 
     def accept(self) -> None:
+        if self.config[0].File_Rename__kapowarr_naming and not self.config[0].File_Rename__dir.strip():
+            OptionalMessageDialog.warning(
+                self,
+                "Kapowarr library root required",
+                "Set Destination Directory to the Kapowarr library root before renaming files.",
+            )
+            return
+
         prog_dialog = QtWidgets.QProgressDialog("", "Cancel", 0, len(self.rename_list), self)
         prog_dialog.setWindowTitle("Renaming Archives")
         prog_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
@@ -232,7 +256,11 @@ class RenameWindow(QtWidgets.QDialog):
 
                 folder = get_rename_dir(
                     comic[0],
-                    self.config[0].File_Rename__dir if self.config[0].File_Rename__move else None,
+                    (
+                        self.config[0].File_Rename__dir
+                        if self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
+                        else None
+                    ),
                 )
 
                 full_path = folder / comic[1]

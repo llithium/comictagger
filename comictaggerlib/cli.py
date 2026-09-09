@@ -567,6 +567,9 @@ class CLI:
         if md.series is None:
             logger.error("%sCan't rename without series name", msg_hdr)
             return Result(Action.rename, Status.read_failure, original_path)
+        if self.config.File_Rename__kapowarr_naming and not self.config.File_Rename__dir.strip():
+            logger.error("%sKapowarr-compatible naming requires --dir to be set to the library root", msg_hdr)
+            return Result(Action.rename, Status.rename_failure, original_path, md=md)
 
         new_ext = ""  # default
         if self.config.File_Rename__auto_extension:
@@ -583,6 +586,10 @@ class CLI:
         renamer.set_smart_cleanup(self.config.File_Rename__use_smart_string_cleanup)
         renamer.move = self.config.File_Rename__move
         renamer.move_only = self.config.File_Rename__only_move
+        renamer.set_kapowarr_naming(
+            self.config.File_Rename__kapowarr_naming,
+            self.config.File_Rename__kapowarr_long_special_versions,
+        )
 
         try:
             new_name = renamer.determine_name(ext=new_ext)
@@ -602,7 +609,14 @@ class CLI:
             logger.exception("Formatter failure: %s metadata: %s", self.config.File_Rename__template, renamer.metadata)
             return Result(Action.rename, Status.rename_failure, original_path, md=md)
 
-        folder = get_rename_dir(ca, self.config.File_Rename__dir if self.config.File_Rename__move else None)
+        folder = get_rename_dir(
+            ca,
+            (
+                self.config.File_Rename__dir
+                if self.config.File_Rename__move or self.config.File_Rename__kapowarr_naming
+                else None
+            ),
+        )
 
         full_path = folder / new_name
 
