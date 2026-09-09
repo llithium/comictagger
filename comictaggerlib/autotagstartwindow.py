@@ -83,6 +83,7 @@ class AutoTagStartWindow(QtWidgets.QDialog):
         self.cbxDontUseYear.setChecked(not self.config.Auto_Tag__use_year_when_identifying)
         self.cbxAssumeIssueOne.setChecked(self.config.Auto_Tag__assume_issue_one)
         self.cbxIgnoreLeadingDigitsInFilename.setChecked(self.config.Auto_Tag__ignore_leading_numbers_in_filename)
+        self.cbxClearMetadata.setChecked(self.config.Auto_Tag__clear_tags)
         self.cbxRemoveAfterSuccess.setChecked(self.config.internal__remove_archive_after_successful_match)
         self.cbxAutoImprint.setChecked(self.config.Auto_Tag__auto_imprint)
 
@@ -143,7 +144,7 @@ class AutoTagStartWindow(QtWidgets.QDialog):
                     prefer_filename=self.config.Auto_Tag__prefer_filename,
                     issue_id=None,
                     metadata=GenericMetadata(),
-                    clear_tags=self.config.Auto_Tag__clear_tags,
+                    clear_tags=self.cbxClearMetadata.isChecked(),
                     publisher_filter=self.config.Auto_Tag__publisher_filter,
                     use_publisher_filter=self.config.Auto_Tag__use_publisher_filter,
                     auto_imprint=self.cbxAutoImprint.isChecked(),

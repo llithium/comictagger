@@ -1962,6 +1962,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.config[0].Auto_Tag__ignore_leading_numbers_in_filename = auto_tag.settings[
             "ignore_leading_numbers_in_filename"
         ]
+        self.config[0].Auto_Tag__clear_tags = auto_tag.settings["clear_tags"]
         self.config[0].internal__remove_archive_after_successful_match = auto_tag.remove_after_success
 
         ca_list = self.fileSelectionList.get_selected_archive_list()
