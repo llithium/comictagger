@@ -139,6 +139,7 @@ class ComicSeries:
     start_year: int | None
     format: str | None
     web_links: list[Url] = dataclasses.field(default_factory=list)
+    volume_number: int | None = None
 
     def copy(self) -> ComicSeries:
         return copy.deepcopy(self)

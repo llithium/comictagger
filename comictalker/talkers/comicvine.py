@@ -21,6 +21,7 @@ import argparse
 import json
 import logging
 import pathlib
+import re
 import time
 from collections.abc import Callable
 from functools import cache
@@ -99,6 +100,7 @@ class CVSeries(TypedDict, total=False):
     site_detail_url: str
     aliases: str
     count_of_issues: int
+    deck: str
     description: str
     id: Required[int]
     image: CVImage
@@ -801,6 +803,11 @@ class ComicVineTalker(ComicTalker):
         start_year = utils.xlate_int(record.get("start_year", ""))
 
         aliases = record.get("aliases") or ""
+        volume_match = re.search(
+            r"\b(?:v(?:ol|olume)?)[.\s-]*(\d+)",
+            record.get("deck") or "",
+            re.IGNORECASE,
+        )
 
         series = ComicSeries(
             aliases=set(utils.split(aliases, "\n")),
@@ -813,6 +820,7 @@ class ComicVineTalker(ComicTalker):
             publisher=pub_name,
             start_year=start_year,
             format=None,
+            volume_number=utils.xlate_int(volume_match.group(1)) if volume_match else None,
         )
         url = utils.xlate(record.get("site_detail_url"))
         if url:
@@ -1064,7 +1072,7 @@ class ComicVineTalker(ComicTalker):
             for role in roles:
                 md.add_credit(person["name"], role.title(), False)
 
-        md.volume = utils.xlate_int(issue.get("volume"))
+        md.volume = series.volume_number
         if self.use_series_start_as_volume:
             md.volume = series.start_year
 

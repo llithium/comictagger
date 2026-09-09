@@ -42,6 +42,27 @@ def test_fetch_issues_in_series(comicvine_api, comic_cache):
     assert results == issues_results
 
 
+def test_comic_vine_deck_volume_is_mapped_to_metadata(comicvine_api):
+    series = comicvine_api._format_series(
+        {
+            "id": 9133,
+            "name": "The Punisher",
+            "deck": "Volume 4.",
+            "start_year": "2001",
+        }
+    )
+    metadata = comicvine_api._map_comic_issue_to_metadata(
+        {
+            "id": 68397,
+            "issue_number": "1",
+            "volume": {"id": 9133, "name": "The Punisher"},
+        },
+        series,
+    )
+
+    assert metadata.volume == 4
+
+
 def test_fetch_issue_data_by_issue_id(comicvine_api):
     result = comicvine_api.fetch_comic_data(140529, on_rate_limit=None)
     result.notes = None
