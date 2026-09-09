@@ -17,6 +17,7 @@ jobs:
       pull-requests: write
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         python-version: [3.14]
         os: [ubuntu-latest]
@@ -37,7 +38,7 @@ jobs:
 
       - uses: reviewdog/action-setup@v1
         with:
-          reviewdog_version: nightly
+          reviewdog_version: v0.21.0
       - run: flake8 | reviewdog -f=flake8 -reporter=github-pr-review -tee -level=error -fail-on-error
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,6 +46,7 @@ jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", 3.14]
         os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15-intel, macos-14, windows-latest]
@@ -100,3 +102,5 @@ jobs:
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
           python -m tox p
         shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
