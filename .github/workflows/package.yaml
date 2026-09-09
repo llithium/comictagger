@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         python-version: [3.14]
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15-intel, macos-14, windows-latest]
+        os: [macos-14]
 
     steps:
       - uses: actions/checkout@v4
@@ -37,11 +37,6 @@ jobs:
           brew upgrade icu4c pkg-config || brew install icu4c pkg-config
         if: runner.os == 'macOS'
 
-      - name: Install linux dependencies
-        run: |
-          sudo apt-get update && sudo apt-get upgrade && sudo apt-get install pkg-config libicu-dev libqt6gui6 libfuse2 desktop-file-utils
-        if: runner.os == 'Linux'
-
       - name: Build, Install and Test PyPi packages
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
@@ -50,12 +45,6 @@ jobs:
           python -m tox r -m build
         shell: bash
 
-
-      - name: Release PyPi package
-        run: |
-          python -m tox r -e pypi-upload
-        shell: bash
-        if: matrix.os == 'ubuntu-22.04'
 
       - name: Get release name
         shell: bash
@@ -70,10 +59,9 @@ jobs:
           name: "${{ env.release_name }}"
           prerelease: "${{ contains(github.ref, '-') }}" # alpha-releases should be 1.3.0-alpha.x full releases should be 1.3.0
           draft: false
-          # upload the single application zip file for each OS and include the wheel built on linux
+          # Upload the Apple Silicon macOS application bundle.
           files: |
             dist/binary/*.zip
             dist/binary/*.tar.gz
             dist/binary/*.dmg
             dist/binary/*.AppImage
-            dist/*${{ fromJSON('["never", ""]')[matrix.os == 'ubuntu-22.04'] }}.whl
