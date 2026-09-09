@@ -51,8 +51,11 @@ KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE = "{series_name} ({year}) Volume {issue_number
 KAPOWARR_SPECIAL_VERSIONS = {
     "tpb": ("TPB", "TPB"),
     "trade paperback": ("TPB", "TPB"),
+    "trade paper back": ("TPB", "TPB"),
     "one shot": ("OS", "One-Shot"),
     "one-shot": ("OS", "One-Shot"),
+    "1 shot": ("OS", "One-Shot"),
+    "1-shot": ("OS", "One-Shot"),
     "os": ("OS", "One-Shot"),
     "hard cover": ("HC", "Hard-Cover"),
     "hard-cover": ("HC", "Hard-Cover"),
@@ -63,10 +66,31 @@ KAPOWARR_SPECIAL_VERSIONS = {
 KAPOWARR_VOLUME_AS_ISSUE_FORMATS = {"vai", "volume as issue", "volume-as-issue"}
 KAPOWARR_VOLUME_AS_ISSUE_TITLE = re.compile(
     r"^v(?:ol(?:ume)?)?\.?\s(?:\d+|(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
-    r"twelve|thirteen|fourteen|fifteen|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)[-\s]{0,1})+)(?:\:\s|$)",
+    r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
+    r"sixty|seventy|eighty|ninety|hundred)[-\s]{0,1})+)(?:\:\s|$)",
     re.IGNORECASE,
 )
 KAPOWARR_SIMPLE_FILENAME_CLEANER = re.compile(r'(<|>|(?<!^\w):|"|\||\?|\*|\x00|(?:\s|\.)+$)')
+KAPOWARR_EXTRA_SPACES = re.compile(r"(?<=\s)(\s+)")
+KAPOWARR_OMNIBUS_TITLE = re.compile(r"\bomnibus\b", re.IGNORECASE)
+KAPOWARR_ONE_SHOT_TITLE = re.compile(r"(?<!preceding\s)\bone[-_ ]?shot\b(?!\scollections?)", re.IGNORECASE)
+KAPOWARR_HARD_COVER_TITLE = re.compile(r"(?<!preceding\s)\bhard[-_ ]?cover\b(?!\scollections?)", re.IGNORECASE)
+KAPOWARR_ISSUE_SPECIAL_VERSIONS = {
+    "omnibus": KAPOWARR_SPECIAL_VERSIONS["omnibus"],
+    "hc": KAPOWARR_SPECIAL_VERSIONS["hard-cover"],
+    "hard-cover": KAPOWARR_SPECIAL_VERSIONS["hard-cover"],
+    "hardcover": KAPOWARR_SPECIAL_VERSIONS["hard-cover"],
+    # Comic Vine's HC/TPB issue label identifies the hard-cover edition in
+    # existing ComicInfo tags, including Spider-Man: Blue.
+    "hc/tpb": KAPOWARR_SPECIAL_VERSIONS["hard-cover"],
+    "os": KAPOWARR_SPECIAL_VERSIONS["one-shot"],
+    "one-shot": KAPOWARR_SPECIAL_VERSIONS["one-shot"],
+    "oneshot": KAPOWARR_SPECIAL_VERSIONS["one-shot"],
+}
+KAPOWARR_DESCRIPTION_SENTENCE_SEPARATOR = re.compile(
+    r"(?<!vs)(?<!r\.i\.p)(?:(?<=[.!?])\s|(?<=[.!?]</p>)(?!$))", re.IGNORECASE
+)
+KAPOWARR_DESCRIPTION_LINK = re.compile(r"<a[^>]*>.*?</a>", re.IGNORECASE)
 
 
 def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> pathlib.Path:
@@ -377,7 +401,9 @@ class FileRenamer:
         return series
 
     def _kapowarr_values(self, md: GenericMetadata) -> dict[str, Any]:
-        issue = IssueString(md.issue).as_string(pad=self.issue_zero_padding)
+        # Kapowarr pads the raw Comic Vine issue string. Its behavior differs
+        # from ComicTagger's IssueString for decimals, suffixes, and negatives.
+        issue = (md.issue or "").zfill(self.issue_zero_padding)
         issue_release_date = None
         if md.year is not None and md.month is not None and md.day is not None:
             issue_release_date = f"{md.year:04d}-{md.month:02d}-{md.day:02d}"
@@ -409,12 +435,68 @@ class FileRenamer:
             # not persisted. Its VAI template uses the normal issue padding.
             return KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE
 
-        if comic_format in KAPOWARR_SPECIAL_VERSIONS:
-            short, long = KAPOWARR_SPECIAL_VERSIONS[comic_format]
+        special_version = KAPOWARR_SPECIAL_VERSIONS.get(comic_format)
+        if special_version is None and not comic_format:
+            special_version = self._kapowarr_infer_special_version(md)
+
+        if special_version is not None:
+            short, long = special_version
             values["special_version"] = long if self.kapowarr_long_special_versions else short
             return KAPOWARR_SPECIAL_TEMPLATE
 
         return KAPOWARR_FILE_TEMPLATE
+
+    @staticmethod
+    def _kapowarr_special_version_from_volume_text(value: str | None) -> tuple[str, str] | None:
+        if not value:
+            return None
+        if KAPOWARR_OMNIBUS_TITLE.search(value):
+            return KAPOWARR_SPECIAL_VERSIONS["omnibus"]
+        if KAPOWARR_ONE_SHOT_TITLE.search(value):
+            return KAPOWARR_SPECIAL_VERSIONS["one-shot"]
+        if KAPOWARR_HARD_COVER_TITLE.search(value):
+            return KAPOWARR_SPECIAL_VERSIONS["hard-cover"]
+        return None
+
+    @staticmethod
+    def _kapowarr_special_version_from_issue_title(value: str | None) -> tuple[str, str] | None:
+        if not value:
+            return None
+        return KAPOWARR_ISSUE_SPECIAL_VERSIONS.get(value.casefold().replace(" ", ""))
+
+    @classmethod
+    def _kapowarr_infer_special_version(cls, md: GenericMetadata) -> tuple[str, str] | None:
+        """Mirror Kapowarr's one-issue volume classification from ComicInfo."""
+        if md.issue_count != 1:
+            return None
+
+        # Kapowarr first recognises an omnibus, one-shot, or hard-cover from
+        # its volume title, then the exact title of its sole issue.
+        special_version = cls._kapowarr_special_version_from_volume_text(md.series)
+        if special_version is not None:
+            return special_version
+
+        special_version = cls._kapowarr_special_version_from_issue_title(md.title)
+        if special_version is not None:
+            return special_version
+
+        if md.description:
+            first_sentence = KAPOWARR_DESCRIPTION_SENTENCE_SEPARATOR.split(md.description, maxsplit=1)[0]
+            first_sentence = KAPOWARR_DESCRIPTION_LINK.sub("", first_sentence)
+            special_version = cls._kapowarr_special_version_from_volume_text(first_sentence)
+            if special_version is not None:
+                return special_version
+
+        # Kapowarr treats an older one-issue volume as a TPB. It only has a
+        # release date when all three ComicInfo date fields are present.
+        try:
+            release_date = datetime.date(int(md.year), int(md.month), int(md.day))
+        except (TypeError, ValueError):
+            return None
+        release_datetime = datetime.datetime.combine(release_date, datetime.time.min)
+        if datetime.datetime.now() - release_datetime > datetime.timedelta(days=30):
+            return KAPOWARR_SPECIAL_VERSIONS["tpb"]
+        return None
 
     @staticmethod
     def _kapowarr_clean_filestring(value: str | None) -> str | None:
@@ -423,7 +505,8 @@ class FileRenamer:
         # Mirror Kapowarr's simple filename cleaner: remove illegal punctuation
         # rather than replacing it with ComicTagger's dash rules.
         value = value.replace("/", "").replace("\\", "")
-        return KAPOWARR_SIMPLE_FILENAME_CLEANER.sub("", value).strip()
+        value = KAPOWARR_SIMPLE_FILENAME_CLEANER.sub("", value)
+        return KAPOWARR_EXTRA_SPACES.sub("", value).strip()
 
     def determine_name(self, ext: str) -> str:
         class Default(dict[str, Any]):
