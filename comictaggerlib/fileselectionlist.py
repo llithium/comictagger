@@ -406,12 +406,16 @@ class FileSelectionList(QtWidgets.QWidget):
         self.update_row(self.twList.currentRow())
 
     def update_selected_rows(self) -> None:
+        self.remove_deleted()
         self.twList.setSortingEnabled(False)
         for r in range(self.twList.rowCount()):
             item = self.twList.item(r, FileSelectionList.dataColNum)
             if item.isSelected():
                 self.update_row(r)
         self.twList.setSortingEnabled(True)
+        self.loaded_paths = {
+            ca.path for row in range(self.twList.rowCount()) if (ca := self.get_archive_by_row(row)) is not None
+        }
 
     def current_item_changed_cb(self, curr: QtCore.QModelIndex | None, prev: QtCore.QModelIndex | None) -> None:
         if curr is not None:

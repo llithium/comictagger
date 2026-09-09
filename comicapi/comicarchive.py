@@ -181,10 +181,11 @@ class ComicArchive:
     def get_supported_tags(self) -> list[str]:
         return [tag_id for tag_id, tag in tags.items() if tag.enabled and tag.supports_tags(self.archiver)]
 
-    def rename(self, path: pathlib.Path | str) -> None:
+    def rename(self, path: pathlib.Path | str, *, remove_empty_source_dir: bool = False) -> None:
         new_path = pathlib.Path(path).absolute()
         if new_path == self.path:
             return
+        old_parent = self.path.parent
         os.makedirs(new_path.parent, 0o777, True)
         shutil.move(self.path, new_path)
         self.path = new_path
@@ -193,6 +194,12 @@ class ComicArchive:
         # archive at its new location.
         self.archiver = type(self.archiver).open(new_path)
         self.reset_cache()
+        if remove_empty_source_dir:
+            try:
+                old_parent.rmdir()
+            except OSError:
+                # Source folders with other archives or user files are kept.
+                pass
 
     def is_writable(self, check_archive_status: bool = True) -> bool:
         if isinstance(self.archiver, UnknownArchiver):

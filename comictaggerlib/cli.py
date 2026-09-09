@@ -628,7 +628,10 @@ class CLI:
         if not self.config.Runtime_Options__dryrun:
             # rename the file
             try:
-                ca.rename(utils.unique_file(full_path))
+                ca.rename(
+                    utils.unique_file(full_path),
+                    remove_empty_source_dir=self.config.File_Rename__kapowarr_naming,
+                )
             except OSError:
                 logger.exception("Failed to rename comic archive: %s", ca.path)
                 return Result(Action.rename, Status.write_failure, original_path, full_path, md=md)

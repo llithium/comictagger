@@ -274,7 +274,10 @@ class RenameWindow(QtWidgets.QDialog):
 
                 new_name = utils.unique_file(full_path)
                 try:
-                    comic[0].rename(new_name)
+                    comic[0].rename(
+                        new_name,
+                        remove_empty_source_dir=self.config[0].File_Rename__kapowarr_naming,
+                    )
                 except OSError as e:
                     logger.exception("Failed to rename comic archive: %s", comic[0].path)
                     failed_renames.append(

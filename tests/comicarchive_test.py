@@ -129,6 +129,29 @@ def test_rename(tmp_comic, tmp_path):
     assert tmp_comic.path != old_path
 
 
+def test_rename_removes_an_empty_source_directory(tmp_comic, tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_path = source_dir / tmp_comic.path.name
+    tmp_comic.rename(source_path)
+
+    tmp_comic.rename(tmp_path / "library" / "renamed.cbz", remove_empty_source_dir=True)
+
+    assert not source_dir.exists()
+
+
+def test_rename_keeps_a_nonempty_source_directory(tmp_comic, tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_path = source_dir / tmp_comic.path.name
+    tmp_comic.rename(source_path)
+    (source_dir / "keep.txt").touch()
+
+    tmp_comic.rename(tmp_path / "library" / "renamed.cbz", remove_empty_source_dir=True)
+
+    assert source_dir.exists()
+
+
 @pytest.mark.xfail(not comicapi.archivers.rar.rar_support, reason="rar support")
 def test_rename_reopens_cached_rar_archive(tmp_path):
     source = datadir / "fake_cbr.cbr"
