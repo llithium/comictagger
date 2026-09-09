@@ -1023,6 +1023,7 @@ class ComicVineTalker(ComicTalker):
             data_origin=MetadataOrigin(self.id, self.name),
             issue_id=utils.xlate(issue.get("id")),
             series_id=series.id,
+            series_start_year=series.start_year,
             title_aliases=set(utils.split(issue.get("aliases"), "\n")),
             publisher=utils.xlate(series.publisher),
             description=issue.get("description"),

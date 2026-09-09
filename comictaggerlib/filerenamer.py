@@ -496,7 +496,11 @@ class FileRenamer:
             md_dict.update(
                 {
                     "series_name": md_dict["series_name"] or "Unknown",
-                    "year": md_dict["year"] if md_dict["year"] is not None else "Unknown Year",
+                    "year": (
+                        md_dict["series_start_year"]
+                        if md_dict["series_start_year"] is not None
+                        else md_dict["year"] if md_dict["year"] is not None else "Unknown Year"
+                    ),
                     "volume_number": md_dict["volume_number"] or "Unknown",
                 }
             )

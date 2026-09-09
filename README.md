@@ -39,7 +39,7 @@ This fork can rename tagged files using Kapowarr-compatible filenames:
 {series_name} ({year}) Volume {volume_number} Issue {issue_number}
 ```
 
-In **Preferences → Rename**, enable **Use Kapowarr-compatible naming**, set **Destination Directory** to the folder that should contain the renamed archives, then review the rename preview before applying it. The profile uses embedded ComicInfo metadata, including the `Format` field for TPB, one-shot, hardcover, omnibus, and Volume-As-Issue names; it does not query or alter a Kapowarr database. The equivalent CLI option is `--kapowarr-naming --dir /path/to/destination`. It cannot be combined with `--only-move`.
+In **Preferences → Rename**, enable **Use Kapowarr-compatible naming**, set **Destination Directory** to the folder that should contain the renamed archives, then review the rename preview before applying it. The profile uses embedded ComicInfo metadata, including the `Format` field for TPB, one-shot, hardcover, omnibus, and Volume-As-Issue names; it does not query or alter a Kapowarr database. When available, its year is the persisted `SeriesStartYear` from Comic Vine, with the issue year as a fallback. Auto-tag existing archives once to populate that field. The equivalent CLI option is `--kapowarr-naming --dir /path/to/destination`. It cannot be combined with `--only-move`.
 
 
 ## Installation

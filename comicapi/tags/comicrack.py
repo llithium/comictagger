@@ -39,6 +39,7 @@ class ComicRack(Tag):
         self.supported_attributes = {
             "original_hash",
             "series",
+            "series_start_year",
             "issue",
             "issue_count",
             "title",
@@ -219,6 +220,7 @@ class ComicRack(Tag):
                 credit_editor_list.append(credit.person.replace(",", ""))
 
         assign("Series", md.series)
+        assign("SeriesStartYear", md.series_start_year)
         assign("Number", md.issue)
         assign("Count", md.issue_count)
         assign("Title", md.title)
@@ -306,6 +308,7 @@ class ComicRack(Tag):
         md = GenericMetadata()
 
         md.series = utils.xlate(get("Series"))
+        md.series_start_year = utils.xlate_int(get("SeriesStartYear"))
         md.issue = utils.xlate(get("Number"))
         md.issue_count = utils.xlate_int(get("Count"))
         md.title = utils.xlate(get("Title"))

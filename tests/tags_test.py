@@ -5,6 +5,7 @@ from importlib_metadata import entry_points
 
 import comicapi.genericmetadata
 import testing.comicdata
+from comicapi.tags.comicrack import ComicRack
 from comictaggerlib.md import prepare_metadata
 
 tags = []
@@ -45,6 +46,14 @@ def test_metadata(mock_version, tmp_comic, md_saved, tag_type, md):
         written_metadata = written_metadata._get_clean_metadata(*supported_attributes)
 
     assert written_metadata == new_md
+
+
+def test_comicrack_persists_series_start_year(mock_version, tmp_comic):
+    tag = ComicRack(mock_version[0])
+    metadata = comicapi.genericmetadata.GenericMetadata(series_start_year=2024)
+
+    assert tag.write_tags(metadata, tmp_comic.archiver)
+    assert tag.read_tags(tmp_comic.archiver).series_start_year == 2024
 
 
 @pytest.mark.parametrize("metadata, expected", testing.comicdata.metadata_prepared)

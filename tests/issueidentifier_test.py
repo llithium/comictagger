@@ -131,6 +131,7 @@ def test_search(cbz, config, comicvine_api):
             issue=testing.comicvine.cv_issue_result["results"]["issue_number"],
             issue_id=str(testing.comicvine.cv_issue_result["results"]["id"]),
             series_id=str(testing.comicvine.cv_volume_result["results"]["id"]),
+            series_start_year=int(testing.comicvine.cv_volume_result["results"]["start_year"]),
             series=str(testing.comicvine.cv_volume_result["results"]["name"]),
             issue_count=testing.comicvine.cv_volume_result["results"]["count_of_issues"],
             publisher=str(testing.comicvine.cv_volume_result["results"]["publisher"]["name"]),

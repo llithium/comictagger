@@ -53,6 +53,7 @@ def test_save(
     # unrelated to comicvine need to be re-worked
     # the comicvine response is mocked to 1 for caching tests and adding the remaining 5 issues is more work
     md_saved.issue_count = 1
+    md_saved.series_start_year = 2007
     md_saved.credits.insert(
         1,
         comicapi.genericmetadata.Credit(

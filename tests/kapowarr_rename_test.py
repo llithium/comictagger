@@ -53,6 +53,22 @@ def test_kapowarr_regular_issue_defaults_an_untagged_series_to_volume_one() -> N
     )
 
 
+def test_kapowarr_uses_the_persisted_series_start_year() -> None:
+    metadata = GenericMetadata(
+        is_empty=False,
+        series="Lady Mechanika: The Devil in the Lake",
+        issue="3",
+        year=2025,
+        series_start_year=2024,
+        format="Series",
+    )
+
+    assert_renamed_name(
+        rename(metadata),
+        "Lady Mechanika - The Devil in the Lake (2024) Volume 01 Issue 003.cbz",
+    )
+
+
 def test_kapowarr_special_versions_use_their_own_template() -> None:
     metadata = GenericMetadata(
         is_empty=False,

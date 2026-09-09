@@ -201,6 +201,7 @@ class GenericMetadata:
     original_hash: FileHash | None = None
 
     series: str | None = None
+    series_start_year: int | None = None
     series_aliases: set[str] = dataclasses.field(default_factory=set)
     issue: str | None = None
     issue_count: int | None = None
@@ -341,6 +342,7 @@ class GenericMetadata:
         self.original_hash = assign(self.original_hash, new_md.original_hash)
 
         self.series = assign(self.series, new_md.series)
+        self.series_start_year = assign(self.series_start_year, new_md.series_start_year)
 
         self.series_aliases = assign_list(self.series_aliases, new_md.series_aliases)
         self.issue = assign(self.issue, new_md.issue)
@@ -506,6 +508,7 @@ class GenericMetadata:
 
         add_string("data_origin", self.data_origin)
         add_string("series", self.series)
+        add_string("series_start_year", self.series_start_year)
         add_string("original_hash", self.original_hash)
         add_string("series_aliases", ",".join(self.series_aliases))
         add_string("issue", self.issue)

@@ -181,6 +181,7 @@ comic_issue_result = comicapi.genericmetadata.GenericMetadata(
     issue_id=str(cv_issue_result["results"]["id"]),
     series=cv_issue_result["results"]["volume"]["name"],
     series_id=str(cv_issue_result["results"]["volume"]["id"]),
+    series_start_year=int(cv_volume_result["results"]["start_year"]),
     _cover_image=comicapi.genericmetadata.ImageHash(
         URL=cv_issue_result["results"]["image"]["super_url"], Hash=0, Kind=""
     ),
@@ -196,6 +197,7 @@ cv_md = comicapi.genericmetadata.GenericMetadata(
     issue_id=str(cv_issue_result["results"]["id"]),
     series=cv_issue_result["results"]["volume"]["name"],
     series_id=str(cv_issue_result["results"]["volume"]["id"]),
+    series_start_year=int(cv_volume_result["results"]["start_year"]),
     issue=cv_issue_result["results"]["issue_number"],
     title=cv_issue_result["results"]["name"],
     publisher=cv_volume_result["results"]["publisher"]["name"],

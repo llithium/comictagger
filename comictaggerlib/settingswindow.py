@@ -89,6 +89,7 @@ Accepts the following variables:
 {publisher}        (string)
 {month}            (integer)
 {year}             (integer)
+{series_start_year} (integer)
 {day}              (integer)
 {issue_count}      (integer)
 {volume}           (integer)
