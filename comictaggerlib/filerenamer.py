@@ -40,10 +40,9 @@ logger = logging.getLogger(__name__)
 STANDARD_CREDIT_ROLES = ("writer", "penciller", "inker", "colorist", "letterer", "cover artist", "editor", "translator")
 
 
-# These are Kapowarr's stock media-management formats.  Keeping them here,
+# These are Kapowarr-compatible archive filename formats. Keeping them here,
 # rather than duplicating a second formatter, means preview, GUI and CLI all
 # use the same naming and filesystem-safety path.
-KAPOWARR_VOLUME_FOLDER_TEMPLATE = "{publisher}/{series_name}/Volume {volume_number} ({year})"
 KAPOWARR_FILE_TEMPLATE = "{series_name} ({year}) Volume {volume_number} Issue {issue_number}"
 KAPOWARR_SPECIAL_TEMPLATE = "{series_name} ({year}) Volume {volume_number} {special_version}"
 KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE = "{series_name} ({year}) Volume {issue_number}"
@@ -376,10 +375,15 @@ class FileRenamer:
         if md.year is not None and md.month is not None and md.day is not None:
             issue_release_date = f"{md.year:04d}-{md.month:02d}-{md.day:02d}"
 
+        # ComicInfo's Volume field is commonly absent for an ordinary comic
+        # series. Kapowarr-compatible filenames still need the series volume,
+        # where the conventional first volume is 01.
+        volume_number = str(md.volume if md.volume is not None else 1).zfill(2)
+
         return {
             "series_name": md.series,
             "clean_series_name": self._clean_series_name(md.series),
-            "volume_number": str(md.volume).zfill(2) if md.volume is not None else None,
+            "volume_number": volume_number,
             "comicvine_id": md.series_id,
             "issue_comicvine_id": md.issue_id,
             "issue_number": issue,
@@ -492,12 +496,11 @@ class FileRenamer:
             md_dict.update(
                 {
                     "series_name": md_dict["series_name"] or "Unknown",
-                    "publisher": md_dict["publisher"] or "Unknown Publisher",
                     "year": md_dict["year"] if md_dict["year"] is not None else "Unknown Year",
                     "volume_number": md_dict["volume_number"] or "Unknown",
                 }
             )
-            template = f"{KAPOWARR_VOLUME_FOLDER_TEMPLATE}/{self._kapowarr_template(md, md_dict)}"
+            template = self._kapowarr_template(md, md_dict)
 
         new_basename = ""
         for component in pathlib.PureWindowsPath(template).parts:

@@ -19,7 +19,7 @@ def assert_renamed_name(actual: str, expected: str) -> None:
     assert pathlib.PureWindowsPath(actual) == pathlib.PureWindowsPath(expected)
 
 
-def test_kapowarr_regular_issue_uses_the_configured_library_layout() -> None:
+def test_kapowarr_regular_issue_uses_the_configured_filename() -> None:
     metadata = GenericMetadata(
         is_empty=False,
         publisher="DC Comics",
@@ -33,8 +33,23 @@ def test_kapowarr_regular_issue_uses_the_configured_library_layout() -> None:
 
     assert_renamed_name(
         rename(metadata),
-        "DC Comics/The World's Finest - Batman-Superman/Volume 01 (2025)/"
         "The World's Finest - Batman-Superman (2025) Volume 01 Issue 007.cbz",
+    )
+
+
+def test_kapowarr_regular_issue_defaults_an_untagged_series_to_volume_one() -> None:
+    metadata = GenericMetadata(
+        is_empty=False,
+        publisher="Image",
+        series="Lady Mechanika: The Devil in the Lake",
+        issue="1",
+        year=2024,
+        format="Series",
+    )
+
+    assert_renamed_name(
+        rename(metadata),
+        "Lady Mechanika - The Devil in the Lake (2024) Volume 01 Issue 001.cbz",
     )
 
 
@@ -48,10 +63,10 @@ def test_kapowarr_special_versions_use_their_own_template() -> None:
         format="Hardcover",
     )
 
-    assert_renamed_name(rename(metadata), "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 HC.cbz")
+    assert_renamed_name(rename(metadata), "Moon Knight (2024) Volume 02 HC.cbz")
     assert_renamed_name(
         rename(metadata, long_special_versions=True),
-        "Marvel/Moon Knight/Volume 02 (2024)/Moon Knight (2024) Volume 02 Hard-Cover.cbz",
+        "Moon Knight (2024) Volume 02 Hard-Cover.cbz",
     )
 
 
@@ -66,7 +81,7 @@ def test_kapowarr_volume_as_issue_uses_the_issue_number_without_padding() -> Non
         format="Volume As Issue",
     )
 
-    assert_renamed_name(rename(metadata), "Image/Saga/Volume 01 (2026)/Saga (2026) Volume 12.cbz")
+    assert_renamed_name(rename(metadata), "Saga (2026) Volume 12.cbz")
 
 
 def test_kapowarr_template_aliases_are_available_without_enabling_the_profile() -> None:

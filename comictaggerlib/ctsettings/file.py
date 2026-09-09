@@ -249,8 +249,8 @@ def rename(parser: settngs.Manager) -> None:
         default=False,
         action=argparse.BooleanOptionalAction,
         help=(
-            "Use Kapowarr's stock publisher/series/volume folder layout and filename rules. "
-            "Set --dir to the library root. Cannot be combined with --only-move.\ndefault: %(default)s"
+            "Use Kapowarr-compatible filename rules without creating folders. "
+            "Set --dir to the destination directory. Cannot be combined with --only-move.\ndefault: %(default)s"
         ),
     )
     parser.add_setting(

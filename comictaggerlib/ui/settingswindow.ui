@@ -1072,10 +1072,10 @@ Example Merge:
            <item row="6" column="0" colspan="2">
             <widget class="QCheckBox" name="cbxKapowarrNaming">
              <property name="toolTip">
-              <string>Uses Kapowarr's default Publisher/Series/Volume folder layout and its normal, special-version, and Volume-As-Issue filename rules. Set Destination Directory to the library root. The preview is always shown before files are changed. This cannot be combined with Only Move.</string>
+              <string>Uses Kapowarr-compatible normal, special-version, and Volume-As-Issue filename rules without creating folders. Set Destination Directory to the folder that should contain the renamed archives. The preview is always shown before files are changed. This cannot be combined with Only Move.</string>
              </property>
              <property name="text">
-              <string>Use Kapowarr-compatible naming and folders</string>
+              <string>Use Kapowarr-compatible naming</string>
              </property>
             </widget>
            </item>
