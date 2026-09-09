@@ -188,7 +188,11 @@ class ComicArchive:
         os.makedirs(new_path.parent, 0o777, True)
         shutil.move(self.path, new_path)
         self.path = new_path
-        self.archiver.path = pathlib.Path(path)
+        # Some archivers cache an open reader tied to the old filename. Reopen
+        # instead of only replacing ``path`` so a post-rename refresh reads the
+        # archive at its new location.
+        self.archiver = type(self.archiver).open(new_path)
+        self.reset_cache()
 
     def is_writable(self, check_archive_status: bool = True) -> bool:
         if isinstance(self.archiver, UnknownArchiver):

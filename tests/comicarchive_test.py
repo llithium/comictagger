@@ -129,6 +129,21 @@ def test_rename(tmp_comic, tmp_path):
     assert tmp_comic.path != old_path
 
 
+@pytest.mark.xfail(not comicapi.archivers.rar.rar_support, reason="rar support")
+def test_rename_reopens_cached_rar_archive(tmp_path):
+    source = datadir / "fake_cbr.cbr"
+    old_path = tmp_path / source.name
+    new_path = tmp_path / "renamed.cbr"
+    shutil.copy(source, old_path)
+    archive = comicapi.comicarchive.ComicArchive(old_path)
+    archive_files = archive.archiver.get_filename_list()
+    expected_contents = archive.archiver.read_file(archive_files[0])
+
+    archive.rename(new_path)
+
+    assert archive.archiver.read_file(archive_files[0]) == expected_contents
+
+
 def test_rename_ro_dest(tmp_comic, tmp_path):
     old_path = tmp_comic.path
     dest = tmp_path / "tmp"
