@@ -21,6 +21,7 @@ import datetime
 import logging
 import os
 import pathlib
+import re
 import string
 import sys
 import unicodedata
@@ -60,6 +61,12 @@ KAPOWARR_SPECIAL_VERSIONS = {
     "omnibus": ("Omnibus", "Omnibus"),
 }
 KAPOWARR_VOLUME_AS_ISSUE_FORMATS = {"vai", "volume as issue", "volume-as-issue"}
+KAPOWARR_VOLUME_AS_ISSUE_TITLE = re.compile(
+    r"^v(?:ol(?:ume)?)?\.?\s(?:\d+|(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|thirteen|fourteen|fifteen|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)[-\s]{0,1})+)(?:\:\s|$)",
+    re.IGNORECASE,
+)
+KAPOWARR_SIMPLE_FILENAME_CLEANER = re.compile(r'(<|>|(?<!^\w):|"|\||\?|\*|\x00|(?:\s|\.)+$)')
 
 
 def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> pathlib.Path:
@@ -381,7 +388,7 @@ class FileRenamer:
         volume_number = str(md.volume if md.volume is not None else 1).zfill(2)
 
         return {
-            "series_name": md.series,
+            "series_name": self._kapowarr_clean_filestring(md.series),
             "clean_series_name": self._clean_series_name(md.series),
             "volume_number": volume_number,
             "comicvine_id": md.series_id,
@@ -395,10 +402,11 @@ class FileRenamer:
 
     def _kapowarr_template(self, md: GenericMetadata, values: dict[str, Any]) -> str:
         comic_format = (md.format or "").strip().casefold()
-        if comic_format in KAPOWARR_VOLUME_AS_ISSUE_FORMATS:
-            # Kapowarr's Volume-As-Issue template intentionally uses the
-            # unpadded number; it represents a collected volume, not an issue.
-            values["issue_number"] = md.issue
+        if comic_format in KAPOWARR_VOLUME_AS_ISSUE_FORMATS or KAPOWARR_VOLUME_AS_ISSUE_TITLE.search(md.title or ""):
+            # Kapowarr identifies Volume-As-Issue volumes when every Comic
+            # Vine issue title is "Volume N". A tagged archive only contains
+            # one title, so use that same recognizable signal when Format was
+            # not persisted. Its VAI template uses the normal issue padding.
             return KAPOWARR_VOLUME_AS_ISSUE_TEMPLATE
 
         if comic_format in KAPOWARR_SPECIAL_VERSIONS:
@@ -407,6 +415,15 @@ class FileRenamer:
             return KAPOWARR_SPECIAL_TEMPLATE
 
         return KAPOWARR_FILE_TEMPLATE
+
+    @staticmethod
+    def _kapowarr_clean_filestring(value: str | None) -> str | None:
+        if value is None:
+            return None
+        # Mirror Kapowarr's simple filename cleaner: remove illegal punctuation
+        # rather than replacing it with ComicTagger's dash rules.
+        value = value.replace("/", "").replace("\\", "")
+        return KAPOWARR_SIMPLE_FILENAME_CLEANER.sub("", value).strip()
 
     def determine_name(self, ext: str) -> str:
         class Default(dict[str, Any]):

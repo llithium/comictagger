@@ -33,7 +33,7 @@ def test_kapowarr_regular_issue_uses_the_configured_filename() -> None:
 
     assert_renamed_name(
         rename(metadata),
-        "The World's Finest - Batman-Superman (2025) Volume 01 Issue 007.cbz",
+        "The World's Finest BatmanSuperman (2025) Volume 01 Issue 007.cbz",
     )
 
 
@@ -49,7 +49,7 @@ def test_kapowarr_regular_issue_defaults_an_untagged_series_to_volume_one() -> N
 
     assert_renamed_name(
         rename(metadata),
-        "Lady Mechanika - The Devil in the Lake (2024) Volume 01 Issue 001.cbz",
+        "Lady Mechanika The Devil in the Lake (2024) Volume 01 Issue 001.cbz",
     )
 
 
@@ -65,7 +65,7 @@ def test_kapowarr_uses_the_persisted_series_start_year() -> None:
 
     assert_renamed_name(
         rename(metadata),
-        "Lady Mechanika - The Devil in the Lake (2024) Volume 01 Issue 003.cbz",
+        "Lady Mechanika The Devil in the Lake (2024) Volume 01 Issue 003.cbz",
     )
 
 
@@ -86,7 +86,7 @@ def test_kapowarr_special_versions_use_their_own_template() -> None:
     )
 
 
-def test_kapowarr_volume_as_issue_uses_the_issue_number_without_padding() -> None:
+def test_kapowarr_volume_as_issue_uses_the_padded_issue_number() -> None:
     metadata = GenericMetadata(
         is_empty=False,
         publisher="Image",
@@ -97,7 +97,23 @@ def test_kapowarr_volume_as_issue_uses_the_issue_number_without_padding() -> Non
         format="Volume As Issue",
     )
 
-    assert_renamed_name(rename(metadata), "Saga (2026) Volume 12.cbz")
+    assert_renamed_name(rename(metadata), "Saga (2026) Volume 012.cbz")
+
+
+def test_kapowarr_infers_volume_as_issue_and_uses_its_filename_cleaning() -> None:
+    metadata = GenericMetadata(
+        is_empty=False,
+        series="X-Treme X-Men: Prisoner of Fire",
+        issue="1",
+        title="Volume 8",
+        volume=8,
+        year=2004,
+    )
+
+    assert_renamed_name(
+        rename(metadata),
+        "X-Treme X-Men Prisoner of Fire (2004) Volume 001.cbz",
+    )
 
 
 def test_kapowarr_template_aliases_are_available_without_enabling_the_profile() -> None:
