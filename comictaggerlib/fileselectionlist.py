@@ -121,25 +121,31 @@ class FileSelectionList(QtWidgets.QWidget):
         self.remove_archive_list(deleted)
 
     def remove_archive_list(self, ca_list: list[ComicArchive]) -> None:
-        self.twList.setSortingEnabled(False)
+        self.twList.currentItemChanged.disconnect(self.current_item_changed_cb)
         current_removed = False
-        for ca in ca_list:
-            for row in range(self.twList.rowCount()):
-                row_ca = self.get_archive_by_row(row)
-                if row_ca == ca:
-                    if row == self.twList.currentRow():
-                        current_removed = True
-                    self.twList.removeRow(row)
-                    self.loaded_paths -= {ca.path}
-                    break
-        self.twList.setSortingEnabled(True)
+        try:
+            self.twList.setSortingEnabled(False)
+            for ca in ca_list:
+                for row in range(self.twList.rowCount()):
+                    row_ca = self.get_archive_by_row(row)
+                    if row_ca == ca:
+                        if row == self.twList.currentRow():
+                            current_removed = True
+                        self.twList.removeRow(row)
+                        self.loaded_paths -= {ca.path}
+                        break
+            if self.twList.rowCount() > 0 and current_removed:
+                self.twList.selectRow(0)
+        finally:
+            self.twList.setSortingEnabled(True)
+            self.twList.currentItemChanged.connect(self.current_item_changed_cb)
 
         if self.twList.rowCount() > 0 and current_removed:
-            # since on a removal, we select row 0, make sure callback occurs if
-            # we're already there
-            if self.twList.currentRow() == 0:
-                self.current_item_changed_cb(self.twList.currentIndex(), None)
-            self.twList.selectRow(0)
+            # currentItemChanged was disconnected while selecting row 0, so notify
+            # listeners directly without re-entering the callback that removed the row.
+            ca = self.get_current_archive()
+            if ca is not None:
+                self.selectionChanged.emit(QtCore.QVariant(ca))
         elif self.twList.rowCount() <= 0:
             self.listCleared.emit()
 

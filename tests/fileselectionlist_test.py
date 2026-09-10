@@ -4,6 +4,7 @@ import shutil
 
 import pytest
 
+QtCore = pytest.importorskip("PyQt6.QtCore")
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
 from comictaggerlib.fileselectionlist import FileSelectionList
@@ -28,3 +29,66 @@ def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:
     assert file_list.loaded_paths == {destination}
     assert file_list.get_current_archive().path == destination
     application.quit()
+
+
+def test_selecting_moved_archive_removes_it_without_reentrant_selection(tmp_path, config, qtbot) -> None:
+    class TrackingFileSelectionList(FileSelectionList):
+        def __init__(self, *args, **kwargs):
+            self.callback_depth = 0
+            self.max_callback_depth = 0
+            self.callback_events = []
+            super().__init__(*args, **kwargs)
+
+        def current_item_changed_cb(self, curr, prev):
+            self.callback_depth += 1
+            self.max_callback_depth = max(self.max_callback_depth, self.callback_depth)
+            self.callback_events.append(
+                (
+                    self.callback_depth,
+                    curr.row() if curr is not None else None,
+                    prev.row() if prev is not None else None,
+                    self.twList.rowCount(),
+                    self.twList.currentRow(),
+                )
+            )
+            try:
+                super().current_item_changed_cb(curr, prev)
+            finally:
+                self.callback_depth -= 1
+
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    first_path = source_dir / "first.cbz"
+    second_path = source_dir / "second.cbz"
+    shutil.copy(cbz_path, first_path)
+    shutil.copy(cbz_path, second_path)
+
+    file_list = TrackingFileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    selected_archives = []
+    file_list.selectionChanged.connect(selected_archives.append)
+    file_list.resize(600, 240)
+    file_list.show()
+    qtbot.wait(10)
+    first_row, _ = file_list.add_path_item(str(first_path))
+    second_row, _ = file_list.add_path_item(str(second_path))
+    second_index = file_list.twList.model().index(second_row, FileSelectionList.fileColNum)
+    qtbot.mouseClick(
+        file_list.twList.viewport(),
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=file_list.twList.visualRect(second_index).center(),
+    )
+
+    (tmp_path / "library").mkdir()
+    shutil.move(first_path, tmp_path / "library" / "first.cbz")
+    first_index = file_list.twList.model().index(first_row, FileSelectionList.fileColNum)
+    qtbot.mouseClick(
+        file_list.twList.viewport(),
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=file_list.twList.visualRect(first_index).center(),
+    )
+
+    assert file_list.twList.rowCount() == 1
+    assert file_list.get_current_archive().path == second_path
+    assert selected_archives[-1].path == second_path
+    assert file_list.max_callback_depth == 1, file_list.callback_events
