@@ -319,6 +319,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.page_list_editor.modified.connect(self.set_dirty_flag)
         self.page_list_editor.firstFrontCoverChanged.connect(self.front_cover_changed)
         self.page_list_editor.listOrderChanged.connect(self.page_list_order_changed)
+        self.page_list_editor.archiveChanged.connect(self.update_info_box)
         self.tabWidget.currentChanged.connect(self.tab_changed)
         self.leGtin.textChanged.connect(self.gtin_changed)
 
@@ -2139,6 +2140,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def page_list_order_changed(self) -> None:
         self.metadata.pages = self.page_list_editor.get_page_list()
+        self.metadata.page_count = len(self.metadata.pages)
 
     def apply_cbl_transform(self) -> None:
         self.form_to_metadata()

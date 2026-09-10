@@ -51,6 +51,7 @@ def item_move_events(widget: QtWidgets.QWidget) -> QtCore.pyqtBoundSignal:
 class PageListEditor(QtWidgets.QWidget):
     firstFrontCoverChanged = QtCore.pyqtSignal(int)
     listOrderChanged = QtCore.pyqtSignal()
+    archiveChanged = QtCore.pyqtSignal()
     modified = QtCore.pyqtSignal()
 
     pageTypeNames = {
@@ -112,6 +113,7 @@ class PageListEditor(QtWidgets.QWidget):
         self.leBookmark.editingFinished.connect(self.save_bookmark)
         self.btnUp.clicked.connect(self.move_current_up)
         self.btnDown.clicked.connect(self.move_current_down)
+        self.btnDelete.clicked.connect(self.delete_selected)
         self.btnIdentifyScannerPage.clicked.connect(self.identify_scanner_page)
         self.btnIdentifyDoublePage.clicked.connect(self.identify_double_page)
         self.pre_move_row = -1
@@ -136,6 +138,7 @@ class PageListEditor(QtWidgets.QWidget):
         self.cbPageType.setEnabled(False)
         self.chkDoublePage.setEnabled(False)
         self.leBookmark.setEnabled(False)
+        self.btnDelete.setEnabled(False)
         self.listWidget.clear()
         self.comic_archive = None
         self.pages_list = []
@@ -265,8 +268,60 @@ class PageListEditor(QtWidgets.QWidget):
             self.emit_front_cover_change()
             self.modified.emit()
 
+    def delete_selected(self) -> None:
+        """Confirm and permanently remove the selected images from the archive."""
+        rows = self.listWidget.selectionModel().selectedRows()
+        if not rows or self.comic_archive is None:
+            return
+
+        count = len(rows)
+        noun = "page" if count == 1 else "pages"
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Delete Pages",
+            f"Permanently remove {count} selected {noun} from the archive?\n\nThis cannot be undone.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
+        old_page_names = self.comic_archive.get_page_name_list().copy()
+        pages = self.get_page_list()
+        selected_indexes = [pages[index.row()].archive_index for index in rows]
+        removed_indexes = self.comic_archive.remove_pages(selected_indexes)
+        if not removed_indexes:
+            QtWidgets.QMessageBox.critical(self, "Delete Pages", "The selected pages could not be removed.")
+            return
+
+        new_indexes = {name: index for index, name in enumerate(self.comic_archive.get_page_name_list())}
+        removed = set(removed_indexes)
+        remaining_pages = []
+        for page in pages:
+            if page.archive_index in removed:
+                continue
+            page.archive_index = new_indexes[old_page_names[page.archive_index]]
+            page.display_index = len(remaining_pages)
+            remaining_pages.append(page)
+
+        self.set_data(self.comic_archive, remaining_pages)
+
+        self.firstFrontCoverChanged.emit(self.get_first_front_cover())
+        self.listOrderChanged.emit()
+        self.archiveChanged.emit()
+        self.modified.emit()
+
+        if len(removed_indexes) != count:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Delete Pages",
+                f"Removed {len(removed_indexes)} of {count} selected pages. The others could not be removed.",
+            )
+
     def change_page(self) -> None:
         row = self.listWidget.currentRow()
+        if row < 0:
+            return
         pagetype = self.get_current_page_type()
 
         i = self.cbPageType.findData(pagetype)
@@ -349,6 +404,7 @@ class PageListEditor(QtWidgets.QWidget):
     def set_data(self, comic_archive: ComicArchive, pages_list: list[PageMetadata]) -> None:
         self.cbxBlur.setChecked(self.blur)
         self.comic_archive = comic_archive
+        self.btnDelete.setEnabled(comic_archive.is_writable())
         self.pages_list = pages_list
         if pages_list:
             self.select_write_tags(self.tag_ids)
@@ -356,6 +412,7 @@ class PageListEditor(QtWidgets.QWidget):
             self.cbPageType.setEnabled(False)
             self.chkDoublePage.setEnabled(False)
             self.leBookmark.setEnabled(False)
+            self.pageWidget.clear()
 
         self.listWidget.itemSelectionChanged.disconnect(self.change_page)
 

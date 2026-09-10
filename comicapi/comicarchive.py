@@ -354,6 +354,21 @@ class ComicArchive:
             self.page_count = len(self.get_page_name_list())
         return self.page_count
 
+    def remove_pages(self, page_indexes: Iterable[int]) -> list[int]:
+        """Remove image files from the archive and return the indexes successfully removed."""
+        page_names = self.get_page_name_list().copy()
+        indexes = sorted({index for index in page_indexes if 0 <= index < len(page_names)}, reverse=True)
+        removed: list[int] = []
+        for index in indexes:
+            if self.archiver.remove_file(page_names[index]):
+                removed.append(index)
+            else:
+                logger.error("Failed to remove page %d (%s) from %s", index, page_names[index], self.path)
+
+        if removed:
+            self.reset_cache()
+        return sorted(removed)
+
     def __import_pil__(self) -> bool:
         if self.pil_available is not None:
             return self.pil_available
