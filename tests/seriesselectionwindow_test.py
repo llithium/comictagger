@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from comicapi.genericmetadata import ComicSeries
-from comictaggerlib.seriesselectionwindow import sort_series_results
+from comictaggerlib.seriesmatch import sort_series_results
 
 
 def series(id: str, name: str, year: int, issue_count: int) -> ComicSeries:
