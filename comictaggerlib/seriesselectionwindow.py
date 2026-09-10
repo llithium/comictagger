@@ -17,12 +17,10 @@
 from __future__ import annotations
 
 import difflib
-import itertools
 import logging
 import traceback
 from abc import ABCMeta, abstractmethod
 
-import natsort
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 
@@ -42,6 +40,34 @@ from comictaggerlib.ui import qtutils, ui_path
 from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 
 logger = logging.getLogger(__name__)
+
+
+def sort_series_results(
+    results: list[ComicSeries],
+    series_name: str,
+    year: int | None,
+    *,
+    sort_by_year: bool,
+    exact_matches_first: bool,
+) -> list[ComicSeries]:
+    sanitized_full = utils.sanitize_title(series_name, False).casefold()
+
+    def score(result: ComicSeries) -> tuple[bool, bool, float, int, int]:
+        full_name = utils.sanitize_title(result.name, False).casefold()
+        year_compatible = year is None or result.start_year is None or result.start_year <= year
+        exact_match = not exact_matches_first or full_name == sanitized_full
+        title_score = difflib.SequenceMatcher(None, sanitized_full, full_name).ratio()
+        issue_count = result.count_of_issues or 0
+        start_year = result.start_year or 0
+        return (
+            year_compatible,
+            exact_match,
+            title_score,
+            start_year if sort_by_year else issue_count,
+            issue_count if sort_by_year else start_year,
+        )
+
+    return sorted(results, key=score, reverse=True)
 
 
 class SearchThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
@@ -506,6 +532,11 @@ class SeriesSelectionWindow(SelectionWindow):
             OptionalMessageDialog.information(parent=self.iddialog, title="Auto-Select Result", text=info_text)
             return
 
+        if result == IIResult.fetch_data_failure:
+            info_text = " Unable to retrieve matching data. Check the log and try again later."
+            OptionalMessageDialog.critical(parent=self.iddialog, title="Auto-Select Result", text=info_text)
+            return
+
         if result == IIResult.single_bad_cover_score:
             info_text = " Found a match, but cover doesn't seem the same. Verify before committing!"
             qmsg = OptionalMessageDialog.information(parent=self.iddialog, title="Auto-Select Result", text=info_text)
@@ -619,59 +650,14 @@ class SeriesSelectionWindow(SelectionWindow):
             except Exception:
                 logger.exception("bad data error filtering publishers")
 
-        sanitized_full = utils.sanitize_title(self.series_name, False).casefold()
-        sanitized_basic = utils.sanitize_title(self.series_name, True).casefold()
-        matcher_full = difflib.SequenceMatcher(None, sanitized_basic)
-        matcher_basic = difflib.SequenceMatcher(None, sanitized_full)
-
-        def score(result: tuple[str, ComicSeries]) -> float:
-            matcher_full.set_seq2(utils.sanitize_title(result[1].name, False).casefold())
-            return matcher_full.ratio()
-
-        self.series_list = dict(sorted(self.series_list.items(), key=score, reverse=True))
-
-        # pre sort the data - so that we can put exact matches first afterwards
-        # compare as str in case extra chars ie. '1976?'
-        # - missing (none) values being converted to 'None' - consistent with prior behaviour in v1.2.3
-        # sort by start_year if set
-        if self.config.Issue_Identifier__sort_series_by_year:
-            try:
-                self.series_list = dict(
-                    natsort.natsorted(
-                        self.series_list.items(),
-                        key=lambda i: (str(i[1].start_year), str(i[1].count_of_issues)),
-                        reverse=True,
-                    )
-                )
-            except Exception:
-                logger.exception("bad data error sorting results by start_year,count_of_issues")
-
-            try:
-
-                deques: list[list[tuple[str, ComicSeries]]] = [list(), list(), list()]
-
-                def categorize(result: ComicSeries) -> int:
-                    matcher_full.set_seq2(utils.sanitize_title(result.name, False).casefold())
-                    matcher_basic.set_seq2(utils.sanitize_title(result.name, True).casefold())
-                    ratio_full = matcher_full.ratio()
-                    ratio_basic = matcher_basic.ratio()
-                    logger.info("%s: %.3f, %.3f", result.name, ratio_full, ratio_basic)
-                    # here basic means partial sanitization meaning that less things will match
-                    if ratio_basic > 0.9:
-                        return 0
-
-                    # this ensures that 'The Joker' is near the top even if you search 'Joker'
-                    # here full means full sanitization meaning that more things will match
-                    if ratio_full > 0.9:
-                        return 1
-                    return 2
-
-                for comic in self.series_list.items():
-                    deques[categorize(comic[1])].append(comic)
-                logger.info("Length: %d, %d, %d", len(deques[0]), len(deques[1]), len(deques[2]))
-                self.series_list = dict(itertools.chain.from_iterable(deques))
-            except Exception:
-                logger.exception("error filtering exact/near matches: bad data")
+        sorted_results = sort_series_results(
+            list(self.series_list.values()),
+            self.series_name,
+            self.year,
+            sort_by_year=self.config.Issue_Identifier__sort_series_by_year,
+            exact_matches_first=self.config.Issue_Identifier__exact_series_matches_first,
+        )
+        self.series_list = {result.id: result for result in sorted_results}
 
         self.update_buttons()
 

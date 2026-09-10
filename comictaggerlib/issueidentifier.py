@@ -68,6 +68,7 @@ class IssueIdentifierCancelled(Exception): ...
 class Result(Enum):
     single_good_match = auto()
     no_matches = auto()
+    fetch_data_failure = auto()
     single_bad_cover_score = auto()
     multiple_bad_cover_scores = auto()
     multiple_good_matches = auto()
@@ -183,7 +184,10 @@ class IssueIdentifier:
 
         self._print_terms(terms, images)
 
-        issues = self._search_for_issues(terms)
+        try:
+            issues = self._search_for_issues(terms)
+        except IssueIdentifierNetworkError:
+            return Result.fetch_data_failure, []
 
         self.log_msg(f"Found {len(issues)} series that have an issue #{terms['issue_number']}")
 
@@ -572,7 +576,7 @@ class IssueIdentifier:
             )
         except TalkerError as e:
             self.log_msg(f"Error searching for series.\n{e}")
-            return []
+            raise IssueIdentifierNetworkError from e
         # except IssueIdentifierCancelled:
         #     return []
 
@@ -598,7 +602,7 @@ class IssueIdentifier:
             )
         except TalkerError as e:
             self.log_msg(f"Issue with while searching for series details. Aborting...\n{e}")
-            return []
+            raise IssueIdentifierNetworkError from e
         # except IssueIdentifierCancelled:
         #     return []
 

@@ -148,6 +148,32 @@ def test_search(cbz, config, comicvine_api):
         assert r == e
 
 
+def test_search_network_failure_is_not_reported_as_no_match(cbz, config, comicvine_api, monkeypatch):
+    config, definitions = config
+    iio = comictaggerlib.issueidentifier.IssueIdentifierOptions(
+        series_match_search_thresh=config.Issue_Identifier__series_match_search_thresh,
+        series_match_identify_thresh=config.Issue_Identifier__series_match_identify_thresh,
+        use_publisher_filter=config.Auto_Tag__use_publisher_filter,
+        publisher_filter=config.Auto_Tag__publisher_filter,
+        quiet=config.Runtime_Options__quiet,
+        cache_dir=config.Runtime_Options__config.user_cache_dir,
+        border_crop_percent=config.Issue_Identifier__border_crop_percent,
+        talker=comicvine_api,
+        tpb_detection=config.Issue_Identifier__tpb_detection,
+    )
+    identifier = comictaggerlib.issueidentifier.IssueIdentifier(iio, None)
+    monkeypatch.setattr(
+        identifier,
+        "_search_for_issues",
+        lambda terms: (_ for _ in ()).throw(comictaggerlib.issueidentifier.IssueIdentifierNetworkError()),
+    )
+
+    result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+
+    assert result == comictaggerlib.issueidentifier.Result.fetch_data_failure
+    assert matches == []
+
+
 def test_crop_border(cbz, config, comicvine_api):
     config, definitions = config
     iio = comictaggerlib.issueidentifier.IssueIdentifierOptions(

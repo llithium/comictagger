@@ -100,6 +100,13 @@ def identify_comic(
         match_results.no_matches.append(res)
         return res, match_results
 
+    if result == IIResult.fetch_data_failure:
+        logger.error("Online search: Data fetch failed. Save aborted")
+        res.status = Status.fetch_data_failure
+
+        match_results.fetch_data_failures.append(res)
+        return res, match_results
+
     # we got here, so we have a single match
     # now get the particular issue data
     try:
