@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("PyQt6")
+
 from PyQt6 import QtCore, QtWidgets
 
 from comicapi.genericmetadata import PageMetadata
