@@ -566,7 +566,10 @@ class ComicVineTalker(ComicTalker):
             issue: CVIssue = json.loads(cached_issue.data.data)
             series_id = cached_issue.data.series_id
             if series_id not in cached_series:
-                cached_series[series_id] = self._fetch_series_data(int(series_id), on_rate_limit=on_rate_limit)[0]
+                series = cvc.get_series_info(series_id, self.id, expire_stale=False)
+                cached_series[series_id] = self._format_series(
+                    json.loads(series.data.data) if series is not None else issue["volume"]
+                )
             cached_results.append(
                 self._map_comic_issue_to_metadata(
                     issue,
@@ -616,16 +619,18 @@ class ComicVineTalker(ComicTalker):
                 cache_issue,
                 False,  # The /issues/ endpoint never provides credits
             )
-            cvc.add_series_info(
-                self.id,
-                Series(id=str(issue["volume"]["id"]), data=json.dumps(issue["volume"]).encode("utf-8")),
-                False,
-            )
+            series_id = str(issue["volume"]["id"])
+            if cvc.get_series_info(series_id, self.id, expire_stale=False) is None:
+                cvc.add_series_info(
+                    self.id,
+                    Series(id=series_id, data=json.dumps(issue["volume"]).encode("utf-8")),
+                    False,
+                )
 
         for issue in issue_results:
             series = issue["volume"]
             cached_series = cvc.get_series_info(str(series["id"]), self.id, expire_stale=False)
-            if cached_series is not None and cached_series.complete:
+            if cached_series is not None:
                 series = json.loads(cached_series.data.data)
             cached_results.append(
                 self._map_comic_issue_to_metadata(issue, self._format_series(series)),
