@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import pytest
 
 import comicapi.genericmetadata
 import testing.comicvine
+from comictalker.comiccacher import Issue
 
 
 def test_search_for_series(comicvine_api, comic_cache):
@@ -61,6 +63,19 @@ def test_comic_vine_deck_volume_is_mapped_to_metadata(comicvine_api):
     )
 
     assert metadata.volume == 4
+
+
+def test_cached_comic_vine_issue_fetches_complete_series_metadata(comicvine_api, comic_cache):
+    issue = deepcopy(testing.comicvine.cv_issue_result["results"])
+    comic_cache.add_issues_info(
+        comicvine_api.id,
+        [Issue(id=str(issue["id"]), series_id=str(issue["volume"]["id"]), data=json.dumps(issue).encode("utf-8"))],
+        True,
+    )
+
+    metadata = comicvine_api.fetch_comics(issue_ids=[str(issue["id"])])[0]
+
+    assert metadata.series_start_year == 2007
 
 
 def test_fetch_issue_data_by_issue_id(comicvine_api):

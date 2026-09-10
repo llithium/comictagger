@@ -560,17 +560,17 @@ class ComicVineTalker(ComicTalker):
         needed_issues: set[str] = set(issue_ids)
         cached_issues = [x for x in (cvc.get_issue_info(issue_id, self.id) for issue_id in issue_ids) if x is not None]
         needed_issues -= {i.data.id for i in cached_issues}
+        cached_series: dict[str, ComicSeries] = {}
 
         for cached_issue in cached_issues:
             issue: CVIssue = json.loads(cached_issue.data.data)
-            series: CVSeries = issue["volume"]
-            cached_series = cvc.get_series_info(cached_issue.data.series_id, self.id, expire_stale=False)
-            if cached_series is not None and cached_series.complete:
-                series = json.loads(cached_series.data.data)
+            series_id = cached_issue.data.series_id
+            if series_id not in cached_series:
+                cached_series[series_id] = self._fetch_series_data(int(series_id), on_rate_limit=on_rate_limit)[0]
             cached_results.append(
                 self._map_comic_issue_to_metadata(
                     issue,
-                    self._format_series(series),
+                    cached_series[series_id],
                 ),
             )
 
