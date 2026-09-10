@@ -128,6 +128,26 @@ class FileSelectionList(QtWidgets.QWidget):
                 item.setText("")
                 item.setToolTip("")
 
+    def show_manual_matches(self, archives: list[ComicArchive]) -> None:
+        """Distinguish archives resolved in the manual Auto-Tag match picker."""
+        for archive in archives:
+            self._show_match_label(archive, "Manual match", "The match was selected manually after Auto-Tag.")
+        self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
+
+    def show_search_match(self, archive: ComicArchive) -> None:
+        """Distinguish metadata selected through Search Online."""
+        self._show_match_label(archive, "Search match", "The match was selected through Search Online.")
+        self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
+
+    def _show_match_label(self, archive: ComicArchive, label: str, tooltip: str) -> None:
+        row, _archive = self.get_current_list_row(str(archive.path))
+        if row < 0:
+            return
+        item = self.twList.item(row, FileSelectionList.matchColNum)
+        if item is not None:
+            item.setText(label)
+            item.setToolTip(tooltip)
+
     def get_sorting(self) -> tuple[int, int]:
         col = self.twList.horizontalHeader().sortIndicatorSection()
         order = self.twList.horizontalHeader().sortIndicatorOrder().value

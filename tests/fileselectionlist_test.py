@@ -52,6 +52,16 @@ def test_auto_tag_results_are_shown_in_file_list(tmp_path, config, qtbot) -> Non
     file_list.clear_auto_tag_results([file_list.get_archive_by_row(low_confidence_row)])
     assert file_list.twList.item(low_confidence_row, FileSelectionList.matchColNum).text() == ""
 
+    manual_archive = file_list.get_archive_by_row(low_confidence_row)
+    file_list.show_manual_matches([manual_archive])
+    manual_item = file_list.twList.item(low_confidence_row, FileSelectionList.matchColNum)
+    assert manual_item.text() == "Manual match"
+    assert manual_item.toolTip() == "The match was selected manually after Auto-Tag."
+
+    file_list.show_search_match(manual_archive)
+    assert manual_item.text() == "Search match"
+    assert manual_item.toolTip() == "The match was selected through Search Online."
+
 
 def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

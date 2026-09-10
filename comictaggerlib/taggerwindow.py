@@ -1257,6 +1257,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.critical(self, "Search", f"Could not find an issue {new_metadata} for that series")
             return
 
+        if self.comic_archive is not None:
+            self.fileSelectionList.show_search_match(self.comic_archive)
         self.metadata = prepare_metadata(self.metadata, new_metadata, self.config[0])
         # Now push the new combined data into the edit controls
         self.metadata_to_form()
@@ -2056,7 +2058,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         matchdlg.open()
         matchdlg.finished.connect(self._reload_page)
-        matchdlg.matched_files.connect(self.fileSelectionList.remove_archive_list)
+        if config.internal__remove_archive_after_successful_match:
+            matchdlg.matched_files.connect(self.fileSelectionList.remove_archive_list)
+        else:
+            matchdlg.matched_files.connect(self.fileSelectionList.show_manual_matches)
 
     def _reload_page(self) -> None:
         self.fileSelectionList.update_selected_rows()
