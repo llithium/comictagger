@@ -30,6 +30,7 @@ from comicapi.comicarchive import ComicArchive
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.graphics import graphics_path
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
+from comictaggerlib.resulttypes import OnlineMatchResults
 from comictaggerlib.settingswindow import linuxRarHelp, macRarHelp, windowsRarHelp
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
@@ -45,7 +46,8 @@ class FileSelectionList(QtWidgets.QWidget):
     MDFlagColNum = 1
     typeColNum = 2
     readonlyColNum = 3
-    folderColNum = 4
+    matchColNum = 4
+    folderColNum = 5
     dataColNum = fileColNum
 
     def __init__(
@@ -84,6 +86,47 @@ class FileSelectionList(QtWidgets.QWidget):
 
         self.dirty_flag_verification = dirty_flag_verification
         self.rar_ro_shown = False
+
+    def show_auto_tag_results(self, match_results: OnlineMatchResults) -> None:
+        """Show the outcome of the latest Auto-Tag run beside each loaded archive."""
+        outcomes = (
+            (match_results.good_matches, "Matched", "Auto-Tag found and wrote a confident match."),
+            (match_results.multiple_matches, "Multiple", "Auto-Tag found multiple likely matches."),
+            (
+                match_results.low_confidence_matches,
+                "Low confidence",
+                "Auto-Tag found one or more matches, but none were confident enough.",
+            ),
+            (match_results.no_matches, "No match", "Auto-Tag did not find a match."),
+            (match_results.fetch_data_failures, "Fetch error", "Auto-Tag could not fetch the selected metadata."),
+            (match_results.write_failures, "Write error", "Auto-Tag found a match but could not write its tags."),
+        )
+
+        self.twList.setSortingEnabled(False)
+        try:
+            for results, label, tooltip in outcomes:
+                for result in results:
+                    row, _archive = self.get_current_list_row(str(result.original_path))
+                    if row < 0:
+                        continue
+                    item = self.twList.item(row, FileSelectionList.matchColNum)
+                    if item is not None:
+                        item.setText(label)
+                        item.setToolTip(tooltip)
+        finally:
+            self.twList.setSortingEnabled(True)
+        self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
+
+    def clear_auto_tag_results(self, archives: list[ComicArchive]) -> None:
+        """Clear stale outcomes for archives about to be Auto-Tagged again."""
+        for archive in archives:
+            row, _archive = self.get_current_list_row(str(archive.path))
+            if row < 0:
+                continue
+            item = self.twList.item(row, FileSelectionList.matchColNum)
+            if item is not None:
+                item.setText("")
+                item.setToolTip("")
 
     def get_sorting(self) -> tuple[int, int]:
         col = self.twList.horizontalHeader().sortIndicatorSection()
@@ -255,6 +298,7 @@ class FileSelectionList(QtWidgets.QWidget):
         self.twList.setColumnWidth(FileSelectionList.MDFlagColNum, 35)
         self.twList.setColumnWidth(FileSelectionList.readonlyColNum, 35)
         self.twList.setColumnWidth(FileSelectionList.typeColNum, 45)
+        self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
         if self.twList.columnWidth(FileSelectionList.fileColNum) > 250:
             self.twList.setColumnWidth(FileSelectionList.fileColNum, 250)
         if self.twList.columnWidth(FileSelectionList.folderColNum) > 200:
@@ -314,6 +358,7 @@ class FileSelectionList(QtWidgets.QWidget):
             folder_item = QtWidgets.QTableWidgetItem()
             md_item = QtWidgets.QTableWidgetItem()
             readonly_item = QtWidgets.QTableWidgetItem()
+            match_item = QtWidgets.QTableWidgetItem()
             type_item = QtWidgets.QTableWidgetItem()
 
             item_text = os.path.split(ca.path)[1]
@@ -355,6 +400,9 @@ class FileSelectionList(QtWidgets.QWidget):
             readonly_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             readonly_item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
             self.twList.setItem(row, FileSelectionList.readonlyColNum, readonly_item)
+
+            match_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
+            self.twList.setItem(row, FileSelectionList.matchColNum, match_item)
 
             return row, ca
         return -1, None  # type: ignore[return-value]

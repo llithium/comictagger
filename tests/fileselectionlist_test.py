@@ -8,7 +8,49 @@ QtCore = pytest.importorskip("PyQt6.QtCore")
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
 from comictaggerlib.fileselectionlist import FileSelectionList
+from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Status
 from testing.filenames import cbz_path
+
+
+def test_auto_tag_results_are_shown_in_file_list(tmp_path, config, qtbot) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    paths = [source_dir / name for name in ("multiple.cbz", "uncertain.cbz", "missing.cbz")]
+
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    for path in paths:
+        shutil.copy(cbz_path, path)
+        file_list.add_path_item(str(path))
+
+    def result(path):
+        return Result(Action.gui, Status.match_failure, path)
+
+    file_list.show_auto_tag_results(
+        OnlineMatchResults(
+            multiple_matches=[result(paths[0])],
+            low_confidence_matches=[result(paths[1])],
+            no_matches=[result(paths[2])],
+        )
+    )
+
+    outcomes = {
+        file_list.get_archive_by_row(row).path.name: file_list.twList.item(row, FileSelectionList.matchColNum).text()
+        for row in range(file_list.twList.rowCount())
+    }
+    assert outcomes == {
+        "missing.cbz": "No match",
+        "multiple.cbz": "Multiple",
+        "uncertain.cbz": "Low confidence",
+    }
+    low_confidence_row, _archive = file_list.get_current_list_row(str(paths[1]))
+    assert (
+        "none were confident enough"
+        in file_list.twList.item(low_confidence_row, FileSelectionList.matchColNum).toolTip()
+    )
+
+    file_list.clear_auto_tag_results([file_list.get_archive_by_row(low_confidence_row)])
+    assert file_list.twList.item(low_confidence_row, FileSelectionList.matchColNum).text() == ""
 
 
 def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:

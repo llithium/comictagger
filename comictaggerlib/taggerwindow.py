@@ -1967,6 +1967,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.config[0].internal__remove_archive_after_successful_match = auto_tag.remove_after_success
 
         ca_list = self.fileSelectionList.get_selected_archive_list()
+        self.fileSelectionList.clear_auto_tag_results(ca_list)
         self.atprogdialog = AutoTagProgressWindow(self, self.current_talker())
         self.atprogdialog.progressBar.setMaximum(len(ca_list))
         self.atprogdialog.setWindowTitle("Auto-Tagging")
@@ -1996,6 +1997,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.atprogdialog.accept()
 
         self.fileSelectionList.remove_archive_list(archives_to_remove)
+        self.fileSelectionList.show_auto_tag_results(match_results)
         self._reload_page()
         self.atprogdialog = None
 

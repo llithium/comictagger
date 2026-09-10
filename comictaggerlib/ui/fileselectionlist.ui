@@ -74,6 +74,14 @@
      </column>
      <column>
       <property name="text">
+       <string>Match</string>
+      </property>
+      <property name="toolTip">
+       <string>Result of the latest Auto-Tag run</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
        <string>Folder</string>
       </property>
       <property name="toolTip">
