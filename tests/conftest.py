@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import importlib
 import io
 import shutil
 import unittest.mock
@@ -28,7 +29,9 @@ from testing.comicdata import all_seed_imprints, seed_imprints
 
 try:
     import niquests as requests
-except ImportError:
+except ModuleNotFoundError as error:
+    if error.name != "niquests":
+        raise
     import requests
 
 
@@ -74,14 +77,18 @@ def load_publishers(monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def no_requests(monkeypatch) -> None:
     """Remove requests.sessions.Session.request for all tests."""
-    try:
-        monkeypatch.delattr("niquests.sessions.Session.request")
-    except (AttributeError, ModuleNotFoundError):
-        ...
-    try:
-        monkeypatch.delattr("requests.sessions.Session.request")
-    except (AttributeError, ModuleNotFoundError):
-        ...
+    for module_name in ("niquests", "requests"):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as error:
+            if error.name == module_name:
+                continue
+            raise
+
+        sessions = getattr(module, "sessions", None)
+        session_type = getattr(sessions, "Session", None)
+        if getattr(session_type, "request", None) is not None:
+            monkeypatch.delattr(f"{module_name}.sessions.Session.request")
 
 
 @pytest.fixture

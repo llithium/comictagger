@@ -54,11 +54,18 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
 
     # remove the tables
     p = re.compile(r"<table[^<]*?>.*?</table>")
+    table_placeholders: list[str] = []
     if remove_html_tables:
         string = p.sub("", string)
         string = string.replace("*List of covers and their creators:*", "")
     else:
-        string = p.sub("{}", string)
+
+        def replace_table(_match: re.Match[str]) -> str:
+            placeholder = f"\x00COMICTAGGER_TABLE_{len(table_placeholders)}\x00"
+            table_placeholders.append(placeholder)
+            return placeholder
+
+        string = p.sub(replace_table, string)
 
     # now strip all other tags
     p = re.compile(r"<[^<]*?>")
@@ -79,7 +86,7 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
                 hdrs = []
                 col_widths = []
                 for hdr in table.find_all("th"):
-                    item = hdr.string.strip()
+                    item = hdr.get_text(" ", strip=True)
                     hdrs.append(item)
                     col_widths.append(len(item))
                 rows.append(hdrs)
@@ -89,7 +96,7 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
                     col = row.find_all("td")
 
                     for i, c in enumerate(col):
-                        item = c.string.strip()
+                        item = c.get_text(" ", strip=True)
                         cols.append(item)
                         if len(item) > col_widths[i]:
                             col_widths[i] = len(item)
@@ -112,11 +119,13 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
 
                 table_strings.append(table_text + "\n")
 
-            newstring = newstring.format(*table_strings)
+            for placeholder, table_string in zip(table_placeholders, table_strings):
+                newstring = newstring.replace(placeholder, table_string)
         except Exception:
             # we caught an error rebuilding the table.
             # just bail and remove the formatting
             logger.exception("table parse error")
-            newstring = newstring.replace("{}", "")
+            for placeholder in table_placeholders:
+                newstring = newstring.replace(placeholder, "")
 
     return newstring

@@ -26,7 +26,7 @@ from comicapi import utils
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.ctsettings import ct_ns
-from comictaggerlib.filerenamer import FileRenamer, get_rename_dir
+from comictaggerlib.filerenamer import FileRenamer, FileRenamerConfig, get_rename_dir
 from comictaggerlib.md import read_selected_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.settingswindow import SettingsWindow
@@ -68,8 +68,7 @@ class RenameWindow(QtWidgets.QDialog):
         self.rename_list: list[str] = []
 
         self.btnSettings.clicked.connect(self.modify_settings)
-        platform = "universal" if self.config[0].File_Rename__strict_filenames else "auto"
-        self.renamer = FileRenamer(None, platform=platform, replacements=self.config[0].File_Rename__replacements)
+        self.renamer = FileRenamer(None)
 
         self.do_preview()
         from . import gui
@@ -84,15 +83,7 @@ class RenameWindow(QtWidgets.QDialog):
         self.addAction(cancel)
 
     def config_renamer(self, ca: ComicArchive, md: GenericMetadata | None = None) -> tuple[str, Exception | None]:
-        self.renamer.set_template(self.config[0].File_Rename__template)
-        self.renamer.set_issue_zero_padding(self.config[0].File_Rename__issue_number_padding)
-        self.renamer.set_smart_cleanup(self.config[0].File_Rename__use_smart_string_cleanup)
-        self.renamer.replacements = self.config[0].File_Rename__replacements
-        self.renamer.move_only = self.config[0].File_Rename__only_move
-        self.renamer.set_kapowarr_naming(
-            self.config[0].File_Rename__kapowarr_naming,
-            self.config[0].File_Rename__kapowarr_long_special_versions,
-        )
+        self.renamer.apply_config(FileRenamerConfig.from_settings(self.config[0]))
         error = None
 
         new_ext = ca.path.suffix  # default
@@ -117,11 +108,11 @@ class RenameWindow(QtWidgets.QDialog):
                     self.config[0].Filename_Parsing__remove_publisher,
                 )
         self.renamer.set_metadata(md, ca.path.name)
-        self.renamer.move = self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
         return new_ext, error
 
     def do_preview(self) -> None:
         self.twList.setRowCount(0)
+        self.rename_list.clear()
 
         if self.config[0].File_Rename__kapowarr_naming and not self.config[0].File_Rename__dir.strip():
             OptionalMessageDialog.warning(

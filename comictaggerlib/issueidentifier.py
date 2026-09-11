@@ -99,8 +99,6 @@ class IssueIdentifier:
         self.talker = config.talker
         self.image_hasher = 1
 
-        self.only_use_additional_meta_data = False
-
         # a decent hamming score, good enough to call it a match
         self.min_score_thresh: int = 16
 
@@ -125,22 +123,17 @@ class IssueIdentifier:
 
         self.tpb_detection = config.tpb_detection
 
-        self.additional_metadata = GenericMetadata()
         self.output_function = output
         self.progress_callback: Callable[[int, int, bytes], Any] = lambda *x: ...
         if on_progress:
             self.progress_callback = on_progress
         self.on_rate_limit = on_rate_limit
-        self.search_result = Result.no_matches
         self.cancel = False
         self.current_progress = (0, 0)
 
     def calculate_hash(self, image_data: bytes = b"", image: Image.Image | None = None) -> int:
         if self.image_hasher == 3:
             return ImageHasher(data=image_data, image=image).perception_hash()
-        if self.image_hasher == 2:
-            return -1  # ImageHasher(data=image_data, image=image).average_hash2()
-
         return ImageHasher(data=image_data, image=image).average_hash()
 
     def log_msg(self, msg: Any) -> None:

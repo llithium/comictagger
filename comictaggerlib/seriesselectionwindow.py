@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from abc import ABCMeta, abstractmethod
+from typing import Generic, TypeVar
 
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
@@ -39,6 +39,8 @@ from comictaggerlib.ui import qtutils, ui_path
 from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 
 logger = logging.getLogger(__name__)
+
+SelectionItem = TypeVar("SelectionItem")
 
 
 class SearchThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
@@ -129,11 +131,7 @@ class IdentifyThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specif
         self.ratelimit.emit(full_time, sleep_time)
 
 
-class _SelectionWindowMeta(type(QtWidgets.QDialog), ABCMeta):
-    pass
-
-
-class SelectionWindow(QtWidgets.QDialog, metaclass=_SelectionWindowMeta):
+class SelectionWindow(QtWidgets.QDialog, Generic[SelectionItem]):
     ui_file = ui_path / "seriesselectionwindow.ui"
     CoverImageMode = CoverImageWidget.URLMode
     ratelimit = pyqtSignal(float, float)
@@ -213,14 +211,14 @@ class SelectionWindow(QtWidgets.QDialog, metaclass=_SelectionWindowMeta):
 
         self.addAction(cancel)
 
-    @abstractmethod
-    def perform_query(self, refresh: bool = False) -> None: ...
+    def perform_query(self, refresh: bool = False) -> None:
+        raise NotImplementedError
 
-    @abstractmethod
-    def cell_double_clicked(self, r: int, c: int) -> None: ...
+    def cell_double_clicked(self, r: int, c: int) -> None:
+        raise NotImplementedError
 
-    @abstractmethod
-    def update_row(self, row: int, series: ComicSeries) -> None: ...
+    def update_row(self, row: int, series: SelectionItem) -> None:
+        raise NotImplementedError
 
     def set_description(self, widget: QtWidgets.QWidget, text: str) -> None:
         if isinstance(widget, QtWidgets.QTextEdit):
@@ -238,8 +236,8 @@ class SelectionWindow(QtWidgets.QDialog, metaclass=_SelectionWindowMeta):
             for r in rows - shown_rows:
                 self.twList.hideRow(r)
 
-    @abstractmethod
-    def _fetch(self, row: int) -> ComicSeries: ...
+    def _fetch(self, row: int) -> SelectionItem:
+        raise NotImplementedError
 
     def on_ratelimit(self, full_time: float, sleep_time: float) -> None:
         self.ratelimit.emit(full_time, sleep_time)
@@ -259,7 +257,7 @@ class SelectionWindow(QtWidgets.QDialog, metaclass=_SelectionWindowMeta):
         self.update_row(row, item)
 
 
-class SeriesSelectionWindow(SelectionWindow):
+class SeriesSelectionWindow(SelectionWindow[ComicSeries]):
     ui_file = ui_path / "seriesselectionwindow.ui"
     CoverImageMode = CoverImageWidget.URLMode
 
@@ -644,20 +642,6 @@ class SeriesSelectionWindow(SelectionWindow):
     def do_immediate_autoselect(self) -> None:
         self.immediate_autoselect = False
         self.auto_select()
-
-    def current_item_changed(self, curr: QtCore.QModelIndex | None, prev: QtCore.QModelIndex | None) -> None:
-        if curr is None:
-            return
-        if prev is not None and prev.row() == curr.row():
-            return
-
-        row = curr.row()
-
-        item = self._fetch(row)
-        QtWidgets.QApplication.restoreOverrideCursor()
-
-        # Update current record information
-        self.update_row(row, item)
 
     def ratelimit_message(self, full_time: float, sleep_time: float) -> None:
         self.log_output(

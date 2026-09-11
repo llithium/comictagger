@@ -67,6 +67,7 @@ class OnlineMatchResults:
     low_confidence_matches: list[Result] = dataclasses.field(default_factory=list)
     write_failures: list[Result] = dataclasses.field(default_factory=list)
     fetch_data_failures: list[Result] = dataclasses.field(default_factory=list)
+    read_failures: list[Result] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass

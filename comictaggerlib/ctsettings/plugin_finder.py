@@ -38,7 +38,7 @@ T = TypeVar("T")
 def os_sorted(lst: Iterable[T]) -> Iterable[T]:
     import natsort
 
-    key = _custom_key
+    key: Any = _custom_key
     if icu_available or platform.system() == "Windows":
         key = natsort.os_sort_keygen()
     return sorted(lst, key=key)

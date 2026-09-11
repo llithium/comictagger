@@ -75,7 +75,7 @@ class QueryThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifica
         self.finish.emit(issue_list)
 
 
-class IssueSelectionWindow(SelectionWindow):
+class IssueSelectionWindow(SelectionWindow[GenericMetadata]):
     ui_file = ui_path / "issueselectionwindow.ui"
     CoverImageMode = CoverImageWidget.AltCoverMode
     finish = QtCore.pyqtSignal(list)
@@ -99,24 +99,25 @@ class IssueSelectionWindow(SelectionWindow):
         self.initial_id: str = ""
         self.leFilter.textChanged.connect(self.filter)
         self.finish.connect(self.query_finished)
-        self.prog_dialog = None
+        self.prog_dialog: QtWidgets.QProgressDialog | None = None
 
-    def perform_query(self) -> None:  # type: ignore[override]
+    def perform_query(self, refresh: bool = False) -> None:
         if self.prog_dialog:
             self.prog_dialog.deleteLater()
-        self.prog_dialog = QtWidgets.QProgressDialog("Retrieving issues", "Cancel", 0, 100, self)
-        self.prog_dialog.setWindowTitle("Retrieving issues")
-        self.prog_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        self.prog_dialog.setMinimumDuration(1000)
-        center_window_on_parent(self.prog_dialog)
-        self.prog_dialog.show()
+        prog_dialog = QtWidgets.QProgressDialog("Retrieving issues", "Cancel", 0, 100, self)
+        self.prog_dialog = prog_dialog
+        prog_dialog.setWindowTitle("Retrieving issues")
+        prog_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        prog_dialog.setMinimumDuration(1000)
+        center_window_on_parent(prog_dialog)
+        prog_dialog.show()
 
         self.querythread = QueryThread(
             self.talker,
             self.series_id,
         )
         self.querythread.finish.connect(self.finish)
-        self.querythread.finish.connect(self.prog_dialog.close)
+        self.querythread.finish.connect(prog_dialog.close)
         self.querythread.ratelimit.connect(self.ratelimit)
         self.querythread.start()
 
@@ -159,7 +160,7 @@ class IssueSelectionWindow(SelectionWindow):
         else:
             widget.setContent(text.encode("utf-8"), "text/html;charset=UTF-8", QtCore.QUrl(self.talker.website))
 
-    def update_row(self, row: int, issue: GenericMetadata) -> None:  # type: ignore[override]
+    def update_row(self, row: int, issue: GenericMetadata) -> None:
         self.twList.setStyleSheet(self.twList.styleSheet())
         item_text = issue.issue or ""
         item = self.twList.item(row, 0)
@@ -186,7 +187,7 @@ class IssueSelectionWindow(SelectionWindow):
         qtw_item.setData(QtCore.Qt.ItemDataRole.ToolTipRole, item_text)
         qtw_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
 
-    def _fetch(self, row: int) -> GenericMetadata:  # type: ignore[override]
+    def _fetch(self, row: int) -> GenericMetadata:
         self.issue_id = self.twList.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)
         # list selection was changed, update the issue cover
         issue = self.issue_list[self.issue_id]

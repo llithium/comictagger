@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import calendar
+import dataclasses
 import datetime
 import logging
 import os
@@ -26,7 +27,7 @@ import string
 import sys
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence, Sized
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from pathvalidate import Platform, normalize_platform, sanitize_filename
 
@@ -91,6 +92,45 @@ KAPOWARR_DESCRIPTION_SENTENCE_SEPARATOR = re.compile(
     r"(?<!vs)(?<!r\.i\.p)(?:(?<=[.!?])\s|(?<=[.!?]</p>)(?!$))", re.IGNORECASE
 )
 KAPOWARR_DESCRIPTION_LINK = re.compile(r"<a[^>]*>.*?</a>", re.IGNORECASE)
+
+
+class RenameSettings(Protocol):
+    File_Rename__template: str
+    File_Rename__issue_number_padding: int
+    File_Rename__use_smart_string_cleanup: bool
+    File_Rename__move: bool
+    File_Rename__only_move: bool
+    File_Rename__strict_filenames: bool
+    File_Rename__kapowarr_naming: bool
+    File_Rename__kapowarr_long_special_versions: bool
+    File_Rename__replacements: Replacements
+
+
+@dataclasses.dataclass(frozen=True)
+class FileRenamerConfig:
+    template: str
+    issue_number_padding: int
+    smart_cleanup: bool
+    move: bool
+    move_only: bool
+    strict_filenames: bool
+    kapowarr_naming: bool
+    kapowarr_long_special_versions: bool
+    replacements: Replacements
+
+    @classmethod
+    def from_settings(cls, settings: RenameSettings) -> FileRenamerConfig:
+        return cls(
+            template=settings.File_Rename__template,
+            issue_number_padding=settings.File_Rename__issue_number_padding,
+            smart_cleanup=settings.File_Rename__use_smart_string_cleanup,
+            move=settings.File_Rename__move,
+            move_only=settings.File_Rename__only_move,
+            strict_filenames=settings.File_Rename__strict_filenames,
+            kapowarr_naming=settings.File_Rename__kapowarr_naming,
+            kapowarr_long_special_versions=settings.File_Rename__kapowarr_long_special_versions,
+            replacements=settings.File_Rename__replacements,
+        )
 
 
 def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> pathlib.Path:
@@ -372,6 +412,16 @@ class FileRenamer:
         self.metadata = metadata
         self.original_name = original_name
 
+    def apply_config(self, config: FileRenamerConfig) -> None:
+        self.platform = "universal" if config.strict_filenames else "auto"
+        self.replacements = config.replacements
+        self.set_template(config.template)
+        self.set_issue_zero_padding(config.issue_number_padding)
+        self.set_smart_cleanup(config.smart_cleanup)
+        self.move = config.move
+        self.move_only = config.move_only
+        self.set_kapowarr_naming(config.kapowarr_naming, config.kapowarr_long_special_versions)
+
     def set_issue_zero_padding(self, count: int) -> None:
         self.issue_zero_padding = count
 
@@ -489,6 +539,8 @@ class FileRenamer:
 
         # Kapowarr treats an older one-issue volume as a TPB. It only has a
         # release date when all three ComicInfo date fields are present.
+        if md.year is None or md.month is None or md.day is None:
+            return None
         try:
             release_date = datetime.date(int(md.year), int(md.month), int(md.day))
         except (TypeError, ValueError):
