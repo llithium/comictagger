@@ -64,9 +64,12 @@ def test_cache_overwrite(comic_cache, series_info):
     )  # Populate the cache
 
     # Try to insert an incomplete series with different data
-    series_info["name"] = "test 3"
+    updated_series_info = series_info.copy()
+    updated_series_info["name"] = "test 3"
     comic_cache.add_series_info(
-        series=comictalker.comiccacher.Series(id=series_info["id"], data=json.dumps(series_info).encode("utf-8")),
+        series=comictalker.comiccacher.Series(
+            id=updated_series_info["id"], data=json.dumps(updated_series_info).encode("utf-8")
+        ),
         source="test",
         complete=False,
     )

@@ -27,7 +27,6 @@ def test_os_sorted():
         "page10.jpg",
         "!cover",
     ]
-
     assert comicapi.utils.os_sorted(page_name_list) == [
         "!cover",
         "!cover.jpg",
@@ -46,6 +45,10 @@ def test_os_sorted():
         "test/!cover.tar.gz",
         "test/00.tar.gz",
     ]
+
+
+def test_os_sorted_uses_lexical_order_for_natural_sort_ties():
+    assert comicapi.utils.os_sorted(["a1", "a01"]) == ["a01", "a1"]
 
 
 def test_recursive_list_with_file(tmp_path) -> None:

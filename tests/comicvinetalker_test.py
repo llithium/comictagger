@@ -8,6 +8,7 @@ import pytest
 import comicapi.genericmetadata
 import testing.comicvine
 from comictalker.comiccacher import Issue, Series
+from comictalker.comictalker import TalkerDataError
 
 
 def test_search_for_series(comicvine_api, comic_cache):
@@ -32,6 +33,50 @@ def test_search_for_series_stops_on_empty_page(comicvine_api, monkeypatch):
     monkeypatch.setattr(comicvine_api, "_get_cv_content", lambda *args, **kwargs: next(responses))
 
     assert comicvine_api.search_for_series("not cached", literal=True) == []
+
+
+def test_issue_pagination_collects_valid_pages(comicvine_api, monkeypatch):
+    first = deepcopy(testing.comicvine.cv_issue_result)
+    first["results"] = [first["results"]]
+    first["number_of_page_results"] = 1
+    first["number_of_total_results"] = 2
+    second_issue = deepcopy(first["results"][0])
+    second_issue["id"] = 140530
+    second = {**first, "offset": 1, "results": [second_issue]}
+    responses = iter([first, second])
+    calls = []
+
+    def get_page(url, params, *, on_rate_limit):
+        calls.append(params.copy())
+        return next(responses)
+
+    monkeypatch.setattr(comicvine_api, "_get_cv_content", get_page)
+
+    issues = comicvine_api._fetch_all_issue_pages({"filter": "volume:23437"}, on_rate_limit=None)
+
+    assert [issue["id"] for issue in issues] == [140529, 140530]
+    assert len(calls) == 2
+    assert calls[1]["offset"] == 1
+
+
+def test_issue_pagination_fails_without_progress(comicvine_api, monkeypatch):
+    page = deepcopy(testing.comicvine.cv_issue_result)
+    page["results"] = [page["results"]]
+    page["number_of_total_results"] = 2
+    empty = {**page, "number_of_page_results": 0, "results": []}
+    responses = iter([page, empty])
+    calls = []
+
+    def get_page(url, params, *, on_rate_limit):
+        calls.append(params.copy())
+        return next(responses)
+
+    monkeypatch.setattr(comicvine_api, "_get_cv_content", get_page)
+
+    with pytest.raises(TalkerDataError):
+        comicvine_api._fetch_all_issue_pages({"filter": "volume:23437"}, on_rate_limit=None)
+
+    assert len(calls) == 2
 
 
 def test_fetch_series(comicvine_api, comic_cache):

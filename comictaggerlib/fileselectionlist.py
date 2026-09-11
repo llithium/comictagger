@@ -206,16 +206,17 @@ class FileSelectionList(QtWidgets.QWidget):
         if self.twList.rowCount() > 0 and current_removed:
             # currentItemChanged was disconnected while selecting row 0, so notify
             # listeners directly without re-entering the callback that removed the row.
-            ca = self.get_current_archive()
-            if ca is not None:
-                self.selectionChanged.emit(QtCore.QVariant(ca))
+            current_ca = self.get_current_archive()
+            if current_ca is not None:
+                self.selectionChanged.emit(QtCore.QVariant(current_ca))
         elif self.twList.rowCount() <= 0:
             self.listCleared.emit()
 
     def get_archive_by_row(self, row: int) -> ComicArchive | None:
         if row >= 0:
-            ca: ComicArchive = self.twList.item(row, FileSelectionList.dataColNum).data(QtCore.Qt.ItemDataRole.UserRole)
-            return ca
+            item = self.twList.item(row, FileSelectionList.dataColNum)
+            if item is not None:
+                return item.data(QtCore.Qt.ItemDataRole.UserRole)
         return None
 
     def get_current_archive(self) -> ComicArchive | None:

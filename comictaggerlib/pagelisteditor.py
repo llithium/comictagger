@@ -296,7 +296,7 @@ class PageListEditor(QtWidgets.QWidget):
 
         new_indexes = {name: index for index, name in enumerate(self.comic_archive.get_page_name_list())}
         removed = set(removed_indexes)
-        remaining_pages = []
+        remaining_pages: list[PageMetadata] = []
         for page in pages:
             if page.archive_index in removed:
                 continue

@@ -239,7 +239,7 @@ def generate_combobox(option: settngs.Setting, layout: QtWidgets.QGridLayout) ->
     lbl.setToolTip(option.help)
     layout.addWidget(lbl, row, 0)
     widget = QtWidgets.QComboBox()
-    for choice in option.choices:  # type: ignore
+    for choice in option.choices:
         widget.addItem(str(choice))
     widget.setToolTip(option.help)
     layout.addWidget(widget, row, 1)

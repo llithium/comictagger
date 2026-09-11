@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import datetime
 import logging
-import os
 import pathlib
 import sqlite3
 import threading
@@ -58,17 +57,17 @@ class ComicCacher:
         self.local: threading.Thread | None = None
         self.db: sqlite3.Connection | None = None
 
-        # verify that cache is from same version as this one
-        data = ""
+        self.cache_folder.mkdir(parents=True, exist_ok=True)
+
+        # A missing, unreadable, or older version marker starts a fresh cache.
+        data = None
         try:
-            with open(self.version_file, "rb") as f:
-                data = f.read().decode("utf-8")
-        except Exception:
-            pass
+            data = self.version_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            ...
         if data != version:
-            self.clear_cache()
-        else:
-            self.create_cache_db()
+            self._remove_cache_files()
+        self.create_cache_db()
 
     def a_week(self) -> datetime.datetime:
         return datetime.datetime.today() - datetime.timedelta(days=7)
@@ -77,19 +76,13 @@ class ComicCacher:
         return datetime.datetime.today() - datetime.timedelta(days=365)
 
     def clear_cache(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(self.db_file)
-        except Exception:
-            pass
-        try:
-            os.unlink(self.version_file)
-        except Exception:
-            pass
+        self._remove_cache_files()
         self.create_cache_db()
+
+    def _remove_cache_files(self) -> None:
+        self.close()
+        self.db_file.unlink(missing_ok=True)
+        self.version_file.unlink(missing_ok=True)
 
     def connect(self) -> sqlite3.Connection:
         if self.local != threading.current_thread():

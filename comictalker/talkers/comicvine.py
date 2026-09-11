@@ -497,39 +497,7 @@ class ComicVineTalker(ComicTalker):
             "filter": flt,
         }
 
-        cv_response: CVResult[list[CVIssue]] = self._get_cv_content(
-            urljoin(self.api_url, "issues/"),
-            params,
-            on_rate_limit=on_rate_limit,
-        )
-
-        current_result_count = cv_response["number_of_page_results"]
-        total_result_count = cv_response["number_of_total_results"]
-
-        filtered_issues_result = cv_response["results"]
-        offset = 0
-
-        # see if we need to keep asking for more pages...
-        while current_result_count < total_result_count:
-            page_result_count = cv_response["number_of_page_results"]
-            if page_result_count <= 0:
-                logger.warning("Comic Vine returned an empty page before all issues were received")
-                break
-            offset += page_result_count
-
-            params["offset"] = offset
-            cv_response = self._get_cv_content(
-                urljoin(self.api_url, "issues/"),
-                params,
-                on_rate_limit=on_rate_limit,
-            )
-
-            filtered_issues_result.extend(cv_response["results"])
-            page_result_count = cv_response["number_of_page_results"]
-            if page_result_count <= 0:
-                logger.warning("Comic Vine returned an empty page before all issues were received")
-                break
-            current_result_count += page_result_count
+        filtered_issues_result = self._fetch_all_issue_pages(params, on_rate_limit=on_rate_limit)
 
         cvc.add_issues_info(
             self.id,
@@ -639,12 +607,12 @@ class ComicVineTalker(ComicTalker):
                 )
 
         for issue in issue_results:
-            series = issue["volume"]
-            cached_series = cvc.get_series_info(str(series["id"]), self.id, expire_stale=False)
-            if cached_series is not None:
-                series = json.loads(cached_series.data.data)
+            series_data = issue["volume"]
+            series_cache_result = cvc.get_series_info(str(series_data["id"]), self.id, expire_stale=False)
+            if series_cache_result is not None:
+                series_data = json.loads(series_cache_result.data.data)
             cached_results.append(
-                self._map_comic_issue_to_metadata(issue, self._format_series(series)),
+                self._map_comic_issue_to_metadata(issue, self._format_series(series_data)),
             )
 
         return cached_results
@@ -846,6 +814,62 @@ class ComicVineTalker(ComicTalker):
                 logger.debug("Ignoring invalid Comic Vine series URL: %s", url, exc_info=True)
         return series
 
+    def _fetch_all_issue_pages(
+        self,
+        params: dict[str, Any],
+        *,
+        on_rate_limit: RLCallBack | None,
+    ) -> list[CVIssue]:
+        """Fetch all advertised issue pages or fail when the API stops progressing."""
+        url = urljoin(self.api_url, "issues/")
+        request_params = params.copy()
+        response: CVResult[list[CVIssue]] = self._get_cv_content(
+            url,
+            request_params,
+            on_rate_limit=on_rate_limit,
+        )
+        results = list(response["results"])
+        total = response["number_of_total_results"]
+        offset = response.get("offset", 0)
+        page_count = response["number_of_page_results"]
+
+        while len(results) < total:
+            if page_count <= 0 or not response["results"]:
+                raise TalkerDataError(
+                    self.name,
+                    3,
+                    "Comic Vine returned an empty issue page before all advertised results were received",
+                )
+
+            next_offset = offset + page_count
+            if next_offset <= offset:
+                raise TalkerDataError(
+                    self.name,
+                    3,
+                    "Comic Vine issue pagination stopped advancing before all advertised results were received",
+                )
+
+            request_params["offset"] = next_offset
+            response = self._get_cv_content(
+                url,
+                request_params,
+                on_rate_limit=on_rate_limit,
+            )
+            page_results = list(response["results"])
+            page_count = response["number_of_page_results"]
+            response_offset = response.get("offset", next_offset)
+            if page_count <= 0 or not page_results or response_offset <= offset:
+                raise TalkerDataError(
+                    self.name,
+                    3,
+                    "Comic Vine issue pagination stopped advancing before all advertised results were received",
+                )
+
+            results.extend(page_results)
+            offset = response_offset
+
+        return results
+
     def _fetch_issues_in_series(
         self,
         series_id: str,
@@ -875,39 +899,7 @@ class ComicVineTalker(ComicTalker):
             "format": "json",
             "offset": 0,
         }
-        cv_response: CVResult[list[CVIssue]] = self._get_cv_content(
-            urljoin(self.api_url, "issues/"),
-            params,
-            on_rate_limit=on_rate_limit,
-        )
-
-        current_result_count = cv_response["number_of_page_results"]
-        total_result_count = cv_response["number_of_total_results"]
-
-        series_issues_result = cv_response["results"]
-        offset = 0
-
-        # see if we need to keep asking for more pages...
-        while current_result_count < total_result_count:
-            page_result_count = cv_response["number_of_page_results"]
-            if page_result_count <= 0:
-                logger.warning("Comic Vine returned an empty page before all issues were received")
-                break
-            offset += page_result_count
-
-            params["offset"] = offset
-            cv_response = self._get_cv_content(
-                urljoin(self.api_url, "issues/"),
-                params,
-                on_rate_limit=on_rate_limit,
-            )
-
-            series_issues_result.extend(cv_response["results"])
-            page_result_count = cv_response["number_of_page_results"]
-            if page_result_count <= 0:
-                logger.warning("Comic Vine returned an empty page before all issues were received")
-                break
-            current_result_count += page_result_count
+        series_issues_result = self._fetch_all_issue_pages(params, on_rate_limit=on_rate_limit)
         # Format to expected output
         formatted_series_issues_result = [
             self._map_comic_issue_to_metadata(

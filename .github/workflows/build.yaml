@@ -37,7 +37,7 @@ jobs:
           brew upgrade icu4c pkg-config || brew install icu4c pkg-config
         if: runner.os == 'macOS'
 
-      - name: Build and install PyPi packages
+      - name: Build release artifacts
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
           export PKG_CONFIG_PATH="/usr/local/opt/icu4c/lib/pkgconfig:/opt/homebrew/opt/icu4c/lib/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}";
@@ -59,8 +59,9 @@ jobs:
           retention-days: 90
         if: matrix.python-version == 3.14
 
-      - name: PyTest
+      - name: Run validation matrix
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
+          export QT_QPA_PLATFORM=offscreen
           python -m tox p
         shell: bash

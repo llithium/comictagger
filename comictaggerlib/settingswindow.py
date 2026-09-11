@@ -36,7 +36,7 @@ from comicapi.genericmetadata import GenericMetadata, md_test
 from comictaggerlib import ctsettings
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.ctsettings.plugin import group_for_plugin
-from comictaggerlib.filerenamer import FileRenamer, Replacement, Replacements
+from comictaggerlib.filerenamer import FileRenamer, FileRenamerConfig, Replacement, Replacements
 from comictaggerlib.imagefetcher import ImageFetcher
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.ui import ui_path
@@ -418,10 +418,19 @@ class SettingsWindow(QtWidgets.QDialog):
     def _rename_test(self, template: str) -> None:
         if not str(self.leIssueNumPadding.text()).isdigit():
             self.leIssueNumPadding.setText("0")
-        fr = FileRenamer(
-            None,
-            platform="universal" if self.cbxRenameStrict.isChecked() else "auto",
-            replacements=self.get_replacements(),
+        fr = FileRenamer(None)
+        fr.apply_config(
+            FileRenamerConfig(
+                template=template,
+                issue_number_padding=int(self.leIssueNumPadding.text()),
+                smart_cleanup=self.cbxSmartCleanup.isChecked(),
+                move=self.cbxMoveFiles.isChecked(),
+                move_only=self.cbxMoveOnly.isChecked(),
+                strict_filenames=self.cbxRenameStrict.isChecked(),
+                kapowarr_naming=self.cbxKapowarrNaming.isChecked(),
+                kapowarr_long_special_versions=self.cbxKapowarrLongSpecialVersions.isChecked(),
+                replacements=self.get_replacements(),
+            )
         )
         from . import gui
 
@@ -440,12 +449,6 @@ class SettingsWindow(QtWidgets.QDialog):
             name = gui.tagger_window.comic_archive.path.name
 
         fr.set_metadata(metadata, name)
-        fr.move_only = self.cbxMoveOnly.isChecked()
-        fr.move = self.cbxMoveFiles.isChecked() or self.cbxKapowarrNaming.isChecked()
-        fr.set_template(template)
-        fr.set_issue_zero_padding(int(self.leIssueNumPadding.text()))
-        fr.set_smart_cleanup(self.cbxSmartCleanup.isChecked())
-        fr.set_kapowarr_naming(self.cbxKapowarrNaming.isChecked(), self.cbxKapowarrLongSpecialVersions.isChecked())
         try:
             new_filename = fr.determine_name(".cbz")
             new_text = "<pre>"
@@ -741,11 +744,8 @@ class SettingsWindow(QtWidgets.QDialog):
         else:
             dialog.setWindowTitle(f"Find {name} library")
 
-        dialog.fileSelected.connect(self.set_rar_path)
+        dialog.fileSelected.connect(control.setText)
         dialog.open()
-
-    def set_rar_path(self, path: str) -> None:
-        self.leRarExePath.setText(str(path))
 
     def show_rename_tab(self) -> None:
         self.tabWidget.setCurrentIndex(5)

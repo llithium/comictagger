@@ -83,137 +83,129 @@ class ModifyStyleItemDelegate(QtWidgets.QStyledItemDelegate):
         return size
 
 
-# Multiselect combobox from: https://gis.stackexchange.com/a/351152 (with custom changes)
-class CheckableComboBox(QtWidgets.QComboBox):
-    itemChecked = pyqtSignal(str, bool)
+class _CheckableComboBoxBase(QtWidgets.QComboBox):
+    """Shared checked-item behavior for the plain and ordered variants."""
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        # Prevent popup from closing when clicking on an item
         self.view().viewport().installEventFilter(self)
-
-        # Use a custom delegate to keep combo box styles consistent
-        self.setItemDelegate(ModifyStyleItemDelegate(self))
-
-        # Keeps track of when the combobox list is shown
         self.justShown = False
 
-    # Longstanding bug that is fixed almost everywhere but in Linux/Windows pip wheels
-    # https://stackoverflow.com/questions/65826378/how-do-i-use-qcombobox-setplaceholdertext/65830989#65830989
     def paintEvent(self, event: QEvent) -> None:
         painter = QtWidgets.QStylePainter(self)
         painter.setPen(self.palette().color(QtGui.QPalette.ColorRole.Text))
 
-        # draw the combobox frame, focusrect and selected etc.
-        opt = QtWidgets.QStyleOptionComboBox()
-        self.initStyleOption(opt)
-        painter.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt)
+        option = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(option)
+        painter.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, option)
 
         if self.currentIndex() < 0:
-            opt.palette.setBrush(
+            option.palette.setBrush(
                 QtGui.QPalette.ColorRole.ButtonText,
-                opt.palette.brush(QtGui.QPalette.ColorRole.ButtonText).color(),
+                option.palette.brush(QtGui.QPalette.ColorRole.ButtonText).color(),
             )
             if self.placeholderText():
-                opt.currentText = self.placeholderText()
+                option.currentText = self.placeholderText()
 
-        # draw the icon and text
-        painter.drawControl(QtWidgets.QStyle.ControlElement.CE_ComboBoxLabel, opt)
+        painter.drawControl(QtWidgets.QStyle.ControlElement.CE_ComboBoxLabel, option)
 
-    def resizeEvent(self, event: Any) -> None:
-        # Recompute text to elide as needed
+    def resizeEvent(self, event: QEvent) -> None:
         super().resizeEvent(event)
         self._updateText()
 
     def eventFilter(self, obj: Any, event: Any) -> bool:
-        # Allow events before the combobox list is shown
-        if obj == self.view().viewport():
-            # We record that the combobox list has been shown
-            if event.type() == QEvent.Type.Show:
-                self.justShown = True
-            # We record that the combobox list has hidden,
-            # this will happen if the user does not make a selection
-            # but clicks outside of the combobox list or presses escape
-            if event.type() == QEvent.Type.Hide:
-                self._updateText()
-                self.justShown = False
-            # QEvent.Type.MouseButtonPress is inconsistent on activation because double clicks are a thing
-            if event.type() == QEvent.Type.MouseButtonRelease:
-                # If self.justShown is true it means that they clicked on the combobox to change the checked items
-                # This is standard behavior (on macos) but I think it is surprising when it has a multiple select
-                if self.justShown:
-                    self.justShown = False
-                    return True
+        if obj != self.view().viewport():
+            return False
 
-                # Find the current index and item
-                index = self.view().indexAt(event.pos())
-                self.toggleItem(index.row())
+        if event.type() == QEvent.Type.Show:
+            self.justShown = True
+        elif event.type() == QEvent.Type.Hide:
+            self._updateText()
+            self.justShown = False
+            self._dropdown_closed()
+        elif event.type() == QEvent.Type.KeyPress:
+            key_event = cast(QtGui.QKeyEvent, event)
+            if key_event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.toggleItem(self.view().currentIndex().row())
                 return True
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            if self.justShown:
+                self.justShown = False
+                return True
+
+            index = self.view().indexAt(event.pos())
+            if index.isValid():
+                self._handle_item_click(index, event.pos())
+                return True
+
         return False
 
     def currentData(self) -> list[Any]:
-        # Return the list of all checked items data
-        res = []
-        for i in range(self.count()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                res.append(self.itemData(i))
-        return res
+        return [
+            self.itemData(i) for i in range(self.count()) if self.model().item(i).checkState() == Qt.CheckState.Checked
+        ]
 
     def addItem(self, text: str, data: Any = None) -> None:
         super().addItem(text, data)
-        # Need to enable the checkboxes and require one checked item
-        # Expected that state of *all* checkboxes will be set ('adjust_tags_combo' in taggerwindow.py)
         if self.count() == 1:
             self.model().item(0).setCheckState(Qt.CheckState.Checked)
+        self._item_added(text)
 
     def _updateText(self) -> None:
-        texts = []
-        for i in range(self.count()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                texts.append(item.text())
-        text = ", ".join(texts)
-
-        # Compute elided text (with "...")
-
-        # The QStyleOptionComboBox is needed for the call to subControlRect
-        so = QtWidgets.QStyleOptionComboBox()
-        # init with the current widget
-        so.initFrom(self)
-
-        # Ask the style for the size of the text field
-        rect = self.style().subControlRect(
-            QtWidgets.QStyle.ComplexControl.CC_ComboBox, so, QtWidgets.QStyle.SubControl.SC_ComboBoxEditField
+        text = ", ".join(
+            self.model().item(i).text()
+            for i in range(self.count())
+            if self.model().item(i).checkState() == Qt.CheckState.Checked
         )
-
-        # Compute the elided text
-        elidedText = self.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, rect.width())
-
-        # This CheckableComboBox does not use the index, so we clear it and set the placeholder text
+        option = QtWidgets.QStyleOptionComboBox()
+        option.initFrom(self)
+        rect = self.style().subControlRect(
+            QtWidgets.QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QtWidgets.QStyle.SubControl.SC_ComboBoxEditField,
+        )
         self.setCurrentIndex(-1)
-        self.setPlaceholderText(elidedText)
+        self.setPlaceholderText(self.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, rect.width()))
 
     def setItemChecked(self, index: Any, state: bool) -> None:
-        qt_state = Qt.CheckState.Checked if state else Qt.CheckState.Unchecked
         item = self.model().item(index)
         current = self.currentData()
-        # If we have at least one item checked emit itemChecked with the current check state and update text
-        # Require at least one item to be checked and provide a tooltip
         if len(current) == 1 and not state and item.checkState() == Qt.CheckState.Checked:
             QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), self.toolTip(), self, QRect(), 3000)
             return
 
         if current:
-            item.setCheckState(qt_state)
-            self.itemChecked.emit(self.itemData(index), state)
+            item.setCheckState(Qt.CheckState.Checked if state else Qt.CheckState.Unchecked)
+            self._checked_item_changed(index, state)
             self._updateText()
 
     def toggleItem(self, index: int) -> None:
-        if self.model().item(index).checkState() == Qt.CheckState.Checked:
-            self.setItemChecked(index, False)
-        else:
-            self.setItemChecked(index, True)
+        if 0 <= index < self.count():
+            self.setItemChecked(index, self.model().item(index).checkState() != Qt.CheckState.Checked)
+
+    def _handle_item_click(self, index: QModelIndex, pos: QPoint) -> None:
+        self.toggleItem(index.row())
+
+    def _dropdown_closed(self) -> None:
+        return
+
+    def _item_added(self, text: str) -> None:
+        return
+
+    def _checked_item_changed(self, index: int, state: bool) -> None:
+        return
+
+
+# Multiselect combobox from: https://gis.stackexchange.com/a/351152 (with custom changes)
+class CheckableComboBox(_CheckableComboBoxBase):
+    itemChecked = pyqtSignal(str, bool)
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.setItemDelegate(ModifyStyleItemDelegate(self))
+
+    def _checked_item_changed(self, index: int, state: bool) -> None:
+        self.itemChecked.emit(self.itemData(index), state)
 
 
 # Inspiration from https://github.com/marcel-goldschen-ohm/ModelViewPyQt and https://github.com/zxt50330/qitemdelegate-example
@@ -375,7 +367,7 @@ class ReadStyleItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 # Multiselect combobox from: https://gis.stackexchange.com/a/351152 (with custom changes)
-class CheckableOrderComboBox(QtWidgets.QComboBox):
+class CheckableOrderComboBox(_CheckableComboBoxBase):
     itemClicked = pyqtSignal(QModelIndex, QPoint)
     dropdownClosed = pyqtSignal(list)
 
@@ -387,36 +379,8 @@ class CheckableOrderComboBox(QtWidgets.QComboBox):
         )
         self.setItemDelegate(itemDelegate)
 
-        # Prevent popup from closing when clicking on an item
-        self.view().viewport().installEventFilter(self)
-
         # Go on a bit of a merry-go-round with the signals to avoid custom model/view
         self.itemDelegate().buttonClicked.connect(self.buttonClicked)
-
-        # Keeps track of when the combobox list is shown
-        self.justShown = False
-
-    # Longstanding bug that is fixed almost everywhere but in Linux/Windows pip wheels
-    # https://stackoverflow.com/questions/65826378/how-do-i-use-qcombobox-setplaceholdertext/65830989#65830989
-    def paintEvent(self, event: QEvent) -> None:
-        painter = QtWidgets.QStylePainter(self)
-        painter.setPen(self.palette().color(QtGui.QPalette.ColorRole.Text))
-
-        # draw the combobox frame, focusrect and selected etc.
-        opt = QtWidgets.QStyleOptionComboBox()
-        self.initStyleOption(opt)
-        painter.drawComplexControl(QtWidgets.QStyle.ComplexControl.CC_ComboBox, opt)
-
-        if self.currentIndex() < 0:
-            opt.palette.setBrush(
-                QtGui.QPalette.ColorRole.ButtonText,
-                opt.palette.brush(QtGui.QPalette.ColorRole.ButtonText).color(),
-            )
-            if self.placeholderText():
-                opt.currentText = self.placeholderText()
-
-        # draw the icon and text
-        painter.drawControl(QtWidgets.QStyle.ControlElement.CE_ComboBoxLabel, opt)
 
     def buttonClicked(self, index: QModelIndex, button: ClickedButtonEnum) -> None:
         if button == ClickedButtonEnum.up:
@@ -426,57 +390,13 @@ class CheckableOrderComboBox(QtWidgets.QComboBox):
         else:
             self.toggleItem(index.row())
 
-    def resizeEvent(self, event: Any) -> None:
-        # Recompute text to elide as needed
-        super().resizeEvent(event)
-        self._updateText()
+    def _handle_item_click(self, index: QModelIndex, pos: QPoint) -> None:
+        self.itemClicked.emit(index, pos)
 
-    def eventFilter(self, obj: Any, event: Any) -> bool:
-        # Allow events before the combobox list is shown
-        if obj == self.view().viewport():
-            # We record that the combobox list has been shown
-            if event.type() == QEvent.Type.Show:
-                self.justShown = True
-            # We record that the combobox list has hidden,
-            # this will happen if the user does not make a selection
-            # but clicks outside of the combobox list or presses escape
-            if event.type() == QEvent.Type.Hide:
-                self._updateText()
-                self.justShown = False
-                # Reverse as the display order is in "priority" order for the user whereas overlay requires reversed
-                self.dropdownClosed.emit(self.currentData())
-            # QEvent.Type.MouseButtonPress is inconsistent on activation because double clicks are a thing
-            if event.type() == QEvent.Type.MouseButtonRelease:
-                # If self.justShown is true it means that they clicked on the combobox to change the checked items
-                # This is standard behavior (on macos) but I think it is surprising when it has a multiple select
-                if self.justShown:
-                    self.justShown = False
-                    return True
+    def _dropdown_closed(self) -> None:
+        self.dropdownClosed.emit(self.currentData())
 
-                # Find the current index and item
-                index = self.view().indexAt(event.pos())
-                if index.isValid():
-                    self.itemClicked.emit(index, event.pos())
-                    return True
-
-        return False
-
-    def currentData(self) -> list[Any]:
-        # Return the list of all checked items data
-        res = []
-        for i in range(self.count()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                res.append(self.itemData(i))
-        return res
-
-    def addItem(self, text: str, data: Any = None) -> None:
-        super().addItem(text, data)
-        # Need to enable the checkboxes and require one checked item
-        # Expected that state of *all* checkboxes will be set ('adjust_tags_combo' in taggerwindow.py)
-        if self.count() == 1:
-            self.model().item(0).setCheckState(Qt.CheckState.Checked)
-
+    def _item_added(self, text: str) -> None:
         # Add room for "move" arrows
         text_width = self.fontMetrics().boundingRect(text).width()
         checkbox_width = 40
@@ -497,50 +417,3 @@ class CheckableOrderComboBox(QtWidgets.QComboBox):
 
         model.setItem(cur.row(), cur.column(), new_clone)
         model.setItem(new.row(), new.column(), cur_clone)
-
-    def _updateText(self) -> None:
-        texts = []
-        for i in range(self.count()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                texts.append(item.text())
-        text = ", ".join(texts)
-
-        # Compute elided text (with "...")
-
-        # The QStyleOptionComboBox is needed for the call to subControlRect
-        so = QtWidgets.QStyleOptionComboBox()
-        # init with the current widget
-        so.initFrom(self)
-
-        # Ask the style for the size of the text field
-        rect = self.style().subControlRect(
-            QtWidgets.QStyle.ComplexControl.CC_ComboBox, so, QtWidgets.QStyle.SubControl.SC_ComboBoxEditField
-        )
-
-        # Compute the elided text
-        elidedText = self.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, rect.width())
-
-        # This CheckableComboBox does not use the index, so we clear it and set the placeholder text
-        self.setCurrentIndex(-1)
-        self.setPlaceholderText(elidedText)
-
-    def setItemChecked(self, index: Any, state: bool) -> None:
-        qt_state = Qt.CheckState.Checked if state else Qt.CheckState.Unchecked
-        item = self.model().item(index)
-        current = self.currentData()
-        # If we have at least one item checked emit itemChecked with the current check state and update text
-        # Require at least one item to be checked and provide a tooltip
-        if len(current) == 1 and not state and item.checkState() == Qt.CheckState.Checked:
-            QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), self.toolTip(), self, QRect(), 3000)
-            return
-
-        if current:
-            item.setCheckState(qt_state)
-            self._updateText()
-
-    def toggleItem(self, index: int) -> None:
-        if self.model().item(index).checkState() == Qt.CheckState.Checked:
-            self.setItemChecked(index, False)
-        else:
-            self.setItemChecked(index, True)

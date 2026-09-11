@@ -81,7 +81,7 @@ winget install ComicTagger.ComicTagger
 ```
 ### From source
 
- 1. Ensure you have python 3.9 installed
+ 1. Ensure you have Python 3.10 or newer installed
  2. Clone this repository `git clone https://github.com/comictagger/comictagger.git`
  7. `pip3 install .[ICU]` or `pip3 install .[GUI,ICU]`
 

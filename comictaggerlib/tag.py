@@ -12,7 +12,7 @@ from comictaggerlib.issueidentifier import IssueIdentifier, IssueIdentifierOptio
 from comictaggerlib.issueidentifier import Result as IIResult
 from comictaggerlib.md import prepare_metadata
 from comictaggerlib.resulttypes import Action, MatchStatus, OnlineMatchResults, Result, Status
-from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
+from comictalker.comictalker import ComicTalker, RLCallBack
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +58,13 @@ def identify_comic(
         on_progress=on_progress,
     )
 
+    query_md = md.copy()
     if not config.Auto_Tag__use_year_when_identifying:
-        md.year = None
-    if config.Auto_Tag__ignore_leading_numbers_in_filename and md.series is not None:
-        md.series = re.sub(r"^([\d.]+)", "", md.series)
+        query_md.year = None
+    if config.Auto_Tag__ignore_leading_numbers_in_filename and query_md.series is not None:
+        query_md.series = re.sub(r"^([\d.]+)", "", query_md.series)
 
-    result, matches = ii.identify(ca, md)
+    result, matches = ii.identify(ca, query_md)
 
     res = Result(
         Action.save,
@@ -112,7 +113,7 @@ def identify_comic(
     try:
         assert matches[0].md.issue_id
         ct_md = talker.fetch_comic_data(issue_id=matches[0].md.issue_id, on_rate_limit=on_rate_limit)
-    except TalkerError as e:
+    except Exception as e:
         logger.exception("Error retrieving issue details. Save aborted. %s", e)
         res.status = Status.fetch_data_failure
         res.match_status = MatchStatus.good_match

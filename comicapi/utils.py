@@ -188,10 +188,11 @@ T = TypeVar("T")
 def os_sorted(lst: Iterable[T]) -> list[T]:
     import natsort
 
-    key = _custom_key
+    key: Any = _custom_key
     if icu_available or platform.system() == "Windows":
         key = natsort.os_sort_keygen()
-    return sorted(sorted(lst), key=key)  # type: ignore[type-var]
+    lexical_sorted = sorted(lst, key=lambda item: cast(Any, item))
+    return sorted(lexical_sorted, key=key)
 
 
 KNOWN_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"}

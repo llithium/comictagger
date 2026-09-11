@@ -37,12 +37,21 @@ jobs:
           brew upgrade icu4c pkg-config || brew install icu4c pkg-config
         if: runner.os == 'macOS'
 
-      - name: Build, Install and Test PyPi packages
+      - name: Build release artifacts
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
           export PKG_CONFIG_PATH="/usr/local/opt/icu4c/lib/pkgconfig:/opt/homebrew/opt/icu4c/lib/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}";
           export PATH="/usr/local/opt/icu4c/bin:/usr/local/opt/icu4c/sbin${PATH+:$PATH}"
           python -m tox r -m build
+        shell: bash
+
+      - name: Run validation matrix before release
+        run: |
+          export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
+          export QT_QPA_PLATFORM=offscreen
+          export PKG_CONFIG_PATH="/usr/local/opt/icu4c/lib/pkgconfig:/opt/homebrew/opt/icu4c/lib/pkgconfig${PKG_CONFIG_PATH+:$PKG_CONFIG_PATH}"
+          export PATH="/usr/local/opt/icu4c/bin:/usr/local/opt/icu4c/sbin${PATH+:$PATH}"
+          python -m tox p
         shell: bash
 
 
