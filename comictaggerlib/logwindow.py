@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to a text file or log"""
+"""A PyQt6 dialog to view a text file or log."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

@@ -40,7 +40,6 @@ def get_talkers(
 
         except Exception:
             logger.exception("Failed to load talker: %s", talker.name)
-            logger.debug("", exc_info=True)
 
     # A dict is used, last plugin wins
     for talker_cls in local_plugins:
@@ -49,6 +48,5 @@ def get_talkers(
             talkers[talker_cls.id] = obj
         except Exception:
             logger.exception("Failed to load talker: %s", talker_cls.id)
-            logger.debug("", exc_info=True)
 
     return talkers, metron_location

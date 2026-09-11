@@ -393,7 +393,6 @@ class ComicArchive:
         *,
         hash_archive: str = "",
     ) -> None:
-        hash_archive = hash_archive
         md.page_count = self.get_number_of_pages()
         md.apply_default_page_list(self.get_page_name_list())
         if not self.seems_to_be_a_comic_archive():

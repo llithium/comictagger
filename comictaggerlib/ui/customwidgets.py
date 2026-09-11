@@ -75,7 +75,7 @@ class ModifyStyleItemDelegate(QtWidgets.QStyledItemDelegate):
         return QRect(checkBoxTopLeftCorner, checkBoxRect.size())
 
     def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        # Reimpliment stock. Only height is used, width is ignored
+        # Reimplement the stock size hint. Only height is used, width is ignored.
         menu_option = QtWidgets.QStyleOptionMenuItem()
         size = self.combobox.style().sizeFromContents(
             QtWidgets.QStyle.ContentsType.CT_MenuItem, menu_option, option.rect.size(), self.combobox
@@ -367,7 +367,7 @@ class ReadStyleItemDelegate(QtWidgets.QStyledItemDelegate):
         return True
 
     def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        # Reimpliment standard combobox sizeHint. Only height is used by view, width is ignored
+        # Reimplement the standard combobox size hint. Only height is used by the view, width is ignored.
         menu_option = QtWidgets.QStyleOptionMenuItem()
         return self.combobox.style().sizeFromContents(
             QtWidgets.QStyle.ContentsType.CT_MenuItem, menu_option, option.rect.size(), self.combobox

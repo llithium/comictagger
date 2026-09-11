@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to select specific issue from list"""
+"""A PyQt6 dialog to select a specific issue from a list."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

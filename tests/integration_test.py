@@ -128,19 +128,21 @@ def test_rename(
 
     # Use the temporary comic we created
     config[0].Runtime_Options__files = [tmp_comic.path]
+    config[0].Runtime_Options__tags_read = ["cr"]
 
     # Set the template
     config[0].File_Rename__template = "{series}"
     # Use the current directory
     config[0].File_Rename__dir = ""
-    # Run ComicTagger
-    CLI(config[0], talkers).run()
+    # Run ComicTagger and verify the actual filesystem result.
+    old_path = tmp_comic.path
+    expected_path = old_path.parent / (md.series + ".cbz")
+    assert CLI(config[0], talkers).run() == 0
+    assert not old_path.exists()
+    assert expected_path.exists()
 
-    # Update the comic path
-    tmp_comic.path = tmp_comic.path.parent / (md.series + ".cbz")
-
-    # Read the CBZ
-    md = tmp_comic.read_tags("cr")
+    renamed_comic = comicapi.comicarchive.ComicArchive(expected_path)
+    md = renamed_comic.read_tags("cr")
 
     # Validate that we got the correct metadata back
     assert md == md_saved

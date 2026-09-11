@@ -9,14 +9,12 @@ import importlib.util
 import logging
 import pathlib
 import platform
-import re
 import sys
 from collections.abc import Generator, Iterable, Sequence
 from typing import Any, NamedTuple, TypeVar
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_PACKAGE_NAME_RE = re.compile(r"[-_.]+")
 PLUGIN_GROUPS = frozenset(("comictagger.talker", "comicapi.archiver", "comicapi.tags"))
 icu_available = importlib.util.find_spec("icu") is not None
 
@@ -65,11 +63,6 @@ class FailedToLoadPlugin(Exception):
         )
 
 
-def normalize_pypi_name(s: str) -> str:
-    """Normalize a distribution name according to PEP 503."""
-    return NORMALIZE_PACKAGE_NAME_RE.sub("-", s).lower()
-
-
 class Plugin(NamedTuple):
     """A plugin before loading."""
 
@@ -105,16 +98,6 @@ class Plugins(NamedTuple):
     archivers: list[LoadedPlugin]
     tags: list[LoadedPlugin]
     talkers: list[LoadedPlugin]
-
-    def all_plugins(self) -> Generator[LoadedPlugin]:
-        """Return an iterator over all :class:`LoadedPlugin`s."""
-        yield from self.archivers
-        yield from self.tags
-        yield from self.talkers
-
-    def versions_str(self) -> str:
-        """Return a user-displayed list of plugin versions."""
-        return ", ".join(sorted({f"{plugin.plugin.package}: {plugin.plugin.version}" for plugin in self.all_plugins()}))
 
 
 def _find_local_plugins(plugin_path: pathlib.Path) -> Generator[Plugin]:

@@ -505,7 +505,7 @@ class CLI:
                 query_md.issue = "1"
         return identify_comic(
             ca,
-            md,
+            query_md,
             tags_read,
             match_results,
             self.config,
@@ -690,7 +690,8 @@ class CLI:
 
         self.output(msg)
 
-        return Result(Action.export, Status.success, ca.path, new_file)
+        status = Status.success if export_success else Status.write_failure
+        return Result(Action.export, status, ca.path, new_file)
 
     def process_file_cli(
         self, command: Action, filename: str, match_results: OnlineMatchResults
@@ -705,7 +706,7 @@ class CLI:
 
         if not ca.seems_to_be_a_comic_archive():
             logger.error("Sorry, but %s is not a comic archive!", filename)
-            return Result(Action.rename, Status.read_failure, ca.path), match_results
+            return Result(command, Status.read_failure, ca.path), match_results
 
         if not ca.is_writable() and (command in (Action.delete, Action.copy, Action.save, Action.rename)):
             logger.error("This archive is not writable")
@@ -717,7 +718,7 @@ class CLI:
         elif command == Action.delete:
             return self.delete(ca), match_results
 
-        elif command == Action.copy is not None:
+        elif command == Action.copy:
             return self.copy(ca), match_results
 
         elif command == Action.save:

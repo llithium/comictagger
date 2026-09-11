@@ -117,6 +117,6 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
             # we caught an error rebuilding the table.
             # just bail and remove the formatting
             logger.exception("table parse error")
-            newstring.replace("{}", "")
+            newstring = newstring.replace("{}", "")
 
     return newstring

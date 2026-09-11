@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to select from automated issue matches"""
+"""A PyQt6 dialog to select from automated issue matches."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

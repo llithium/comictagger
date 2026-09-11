@@ -47,10 +47,12 @@ def test_read_tags(cbz, md_saved):
 def test_write_cr(tmp_comic):
     md = tmp_comic.read_tags("cr")
     md.apply_default_page_list(tmp_comic.get_page_name_list())
+    md.series = "Persisted series"
 
     assert tmp_comic.write_tags(md, "cr")
 
-    md = tmp_comic.read_tags("cr")
+    persisted_md = comicapi.comicarchive.ComicArchive(tmp_comic.path).read_tags("cr")
+    assert persisted_md.series == "Persisted series"
 
 
 @pytest.mark.xfail(not (comicapi.archivers.rar.rar_support and shutil.which("rar")), reason="rar support")
@@ -72,12 +74,13 @@ def test_save_cr_rar(tmp_path, md_saved, md):
 
 def test_page_type_write(tmp_comic):
     md = tmp_comic.read_tags("cr")
-    t = md.pages[0]
-    t.type = ""
+    t = md.pages[1]
+    t.type = comicapi.genericmetadata.PageType.BackCover
 
     assert tmp_comic.write_tags(md, "cr")
 
-    md = tmp_comic.read_tags("cr")
+    persisted_md = comicapi.comicarchive.ComicArchive(tmp_comic.path).read_tags("cr")
+    assert persisted_md.pages[1].type == comicapi.genericmetadata.PageType.BackCover
 
 
 def test_invalid_zip(tmp_comic: comicapi.comicarchive.ComicArchive, md):

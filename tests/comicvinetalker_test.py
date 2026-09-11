@@ -22,6 +22,18 @@ def test_search_for_series(comicvine_api, comic_cache):
     assert results == series_results
 
 
+def test_search_for_series_stops_on_empty_page(comicvine_api, monkeypatch):
+    responses = iter(
+        [
+            {"number_of_page_results": 1, "number_of_total_results": 2, "results": []},
+            {"number_of_page_results": 0, "number_of_total_results": 2, "results": []},
+        ]
+    )
+    monkeypatch.setattr(comicvine_api, "_get_cv_content", lambda *args, **kwargs: next(responses))
+
+    assert comicvine_api.search_for_series("not cached", literal=True) == []
+
+
 def test_fetch_series(comicvine_api, comic_cache):
     result = comicvine_api.fetch_series(23437)
     cache_series = comic_cache.get_series_info(23437, comicvine_api.id)[0]

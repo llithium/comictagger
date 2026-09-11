@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to show pages of a comic archive"""
+"""A PyQt6 dialog to show pages of a comic archive."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

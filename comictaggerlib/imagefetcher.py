@@ -182,7 +182,7 @@ class ImageFetcher:
     def add_image_to_cache(self, url: str, image_data: bytes) -> None:
         con = sqlite3.connect(self.db_file)
         with contextlib.closing(con), con, contextlib.closing(con.cursor()) as cur:
-            timestamp = datetime.datetime.now()
+            timestamp = datetime.datetime.now().isoformat()
 
             tmp_fd, filename = tempfile.mkstemp(dir=self.cache_folder, prefix="img")
             with os.fdopen(tmp_fd, "w+b") as f:
@@ -205,7 +205,6 @@ class ImageFetcher:
             try:
                 with open(filename, "rb") as f:
                     image_data = f.read()
-                    f.close()
             except OSError:
                 pass
 

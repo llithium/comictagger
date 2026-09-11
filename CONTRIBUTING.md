@@ -39,11 +39,11 @@ Please open a [GitHub Pull Request](https://github.com/comictagger/comictagger/p
 
 ## Contributing Code
 
-Currently only python 3.9 is supported however 3.10 will probably work if you try it
+ComicTagger requires Python 3.10 or newer.
 
 Those on linux should install `Pillow` from the system package manager if possible and if the GUI `PyQt6` should be installed from the system package manager
 
-Those on macOS will need to ensure that you are using python3 in x86 mode either by installing an x86 only version of python or using the universal installer and using `python3-intel64` instead of `python3`
+The macOS build and CI workflow targets Apple Silicon (`macos-14`). Use a native Python 3 installation; Intel-only Python is not required.
 
 1. Clone the repository
 ```
@@ -70,18 +70,17 @@ or if on windows PowerShell
 pip install tox
 ```
 
-5. If you are on an M1 Mac you will need to export two environment variables for tests to pass.
-```
-export tox_python=python3.9-intel64
-export tox_env=m1env
-```
-
-6. install ComicTagger
+5. Install ComicTagger
 ```
 tox run -e venv
 ```
 
-7. Make your changes
+6. Make your changes
+7. Run the test suite:
+```bash
+python -m pytest
+```
+
 8. Build to ensure that your changes work: this will produce a binary build in the dist folder
 ```bash
 tox run -m build

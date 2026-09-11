@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to select specific series/volume from list"""
+"""A PyQt6 dialog to select a specific series or volume from a list."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors
@@ -23,7 +23,6 @@ from abc import ABCMeta, abstractmethod
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 
-from comicapi import utils
 from comicapi.comicarchive import ComicArchive
 from comicapi.genericmetadata import ComicSeries, GenericMetadata
 from comictaggerlib.coverimagewidget import CoverImageWidget
@@ -130,8 +129,11 @@ class IdentifyThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specif
         self.ratelimit.emit(full_time, sleep_time)
 
 
-class SelectionWindow(QtWidgets.QDialog):
-    __metaclass__ = ABCMeta
+class _SelectionWindowMeta(type(QtWidgets.QDialog), ABCMeta):
+    pass
+
+
+class SelectionWindow(QtWidgets.QDialog, metaclass=_SelectionWindowMeta):
     ui_file = ui_path / "seriesselectionwindow.ui"
     CoverImageMode = CoverImageWidget.URLMode
     ratelimit = pyqtSignal(float, float)
@@ -141,13 +143,6 @@ class SelectionWindow(QtWidgets.QDialog):
         parent: QtWidgets.QWidget,
         config: ct_ns,
         talker: ComicTalker,
-        series_name: str = "",
-        issue_number: str = "",
-        comic_archive: ComicArchive | None = None,
-        year: int | None = None,
-        issue_count: int | None = None,
-        autoselect: bool = False,
-        literal: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -287,13 +282,6 @@ class SeriesSelectionWindow(SelectionWindow):
             parent,
             config,
             talker,
-            series_name,
-            issue_number,
-            comic_archive,
-            year,
-            issue_count,
-            autoselect,
-            literal,
         )
         self.count = 0
         self.series_name = series_name
@@ -380,22 +368,6 @@ class SeriesSelectionWindow(SelectionWindow):
         item.setText(item_text)
         item.setData(QtCore.Qt.ItemDataRole.ToolTipRole, item_text)
         item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
-
-    def set_description(self, widget: QtWidgets.QWidget, text: str) -> None:
-        if isinstance(widget, QtWidgets.QTextEdit):
-            widget.setText(text.replace("</figure>", "</div>").replace("<figure", "<div"))
-        else:
-            html = text
-            widget.setHtml(html, QUrl(self.talker.website))
-
-    def filter(self, text: str) -> None:
-        rows = set(range(self.twList.rowCount()))
-        for r in rows:
-            self.twList.showRow(r)
-        if text.strip():
-            shown_rows = {x.row() for x in self.twList.findItems(text, QtCore.Qt.MatchFlag.MatchContains)}
-            for r in rows - shown_rows:
-                self.twList.hideRow(r)
 
     def _fetch(self, row: int) -> ComicSeries:
         self.series_id = self.twList.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)

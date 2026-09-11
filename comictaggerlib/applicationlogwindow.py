@@ -7,8 +7,6 @@ from PyQt6 import QtCore, QtGui, QtWidgets, uic
 
 from comictaggerlib.ui import ui_path
 
-logger = logging.getLogger(__name__)
-
 
 class QTextEditLogger(QtCore.QObject, logging.Handler):
     qlog = QtCore.pyqtSignal(str)
@@ -37,17 +35,8 @@ class ApplicationLogWindow(QtWidgets.QDialog):
         f = QtGui.QFont("menlo")
         f.setStyleHint(QtGui.QFont.StyleHint.Monospace)
         self.setFont(f)
-        self._button = QtWidgets.QPushButton(self)
-        self._button.setText("Test Me")
-
         self.log_folder = log_folder
         self.lblLogLocation.setText(f'Log Location: <a href="file://{log_folder}">{log_folder}</a>')
-
-        layout = self.layout()
-        layout.addWidget(self._button)
-
-        # Connect signal to slot
-        self._button.clicked.connect(self.test)
         self.textEdit.setTabStopDistance(self.textEdit.tabStopDistance() * 2)
         from . import gui
 
@@ -59,9 +48,3 @@ class ApplicationLogWindow(QtWidgets.QDialog):
         cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
 
         self.addAction(cancel)
-
-    def test(self) -> None:
-        logger.debug("damn, a bug")
-        logger.info("something to remember")
-        logger.warning("that's not right")
-        logger.error("foobar")

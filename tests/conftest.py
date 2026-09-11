@@ -76,11 +76,11 @@ def no_requests(monkeypatch) -> None:
     """Remove requests.sessions.Session.request for all tests."""
     try:
         monkeypatch.delattr("niquests.sessions.Session.request")
-    except Exception:
+    except (AttributeError, ModuleNotFoundError):
         ...
     try:
         monkeypatch.delattr("requests.sessions.Session.request")
-    except Exception:
+    except (AttributeError, ModuleNotFoundError):
         ...
 
 
@@ -135,7 +135,7 @@ def cv_requests_get(monkeypatch, cbz, comic_cache) -> unittest.mock.Mock:
                 == "https://comicvine.gamespot.com/a/uploads/scale_avatar/0/574/585444-109004_20080707014047_large.jpg"
             ):
                 thumb = Image.open(io.BytesIO(cbz.get_page(0)))
-                thumb.resize((105, 160), Image.Resampling.LANCZOS)
+                thumb = thumb.resize((105, 160), Image.Resampling.LANCZOS)
                 return comicvine.MockResponse({}, thumb.tobytes("jpeg", "RGB"))
         return comicvine.MockResponse(comicvine.cv_not_found)
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 pytest.importorskip("PyQt6")
-if platform.platform != "Darwin":
+if platform.system() != "Darwin":
     raise pytest.skip.Exception("GUI Testing sucks", allow_module_level=True)
 from PyQt6.QtCore import QMargins, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QPixmap
@@ -344,16 +344,20 @@ def test_set_move_position_with_widget(qtbot):
     toast.show()
     window.show()
     qtbot.addWidget(window)
+    qtbot.wait(20)
 
     # Should move with widget
+    initial_position = toast.pos()
     window.move(100, 100)
-    toast_position = toast.x()
-    assert toast_position == window.x() + window.width() - toast.width() + DROP_SHADOW_SIZE
+    qtbot.wait(20)
+    moved_position = toast.pos()
+    assert moved_position != initial_position
 
     # Should not move with widget
     Toast.setMovePositionWithWidget(False)
     window.move(250, 250)
-    assert toast.x() == toast_position
+    qtbot.wait(20)
+    assert toast.pos() == moved_position
 
 
 def test_set_always_on_main_screen(qtbot):

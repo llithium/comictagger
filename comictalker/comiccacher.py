@@ -63,13 +63,12 @@ class ComicCacher:
         try:
             with open(self.version_file, "rb") as f:
                 data = f.read().decode("utf-8")
-                f.close()
         except Exception:
             pass
         if data != version:
             self.clear_cache()
-
-        self.create_cache_db()
+        else:
+            self.create_cache_db()
 
     def a_week(self) -> datetime.datetime:
         return datetime.datetime.today() - datetime.timedelta(days=7)
@@ -120,8 +119,6 @@ class ComicCacher:
                 source      TEXT NOT NULL,
                 search_term TEXT,
                 PRIMARY KEY (id, source, search_term))""")
-            cur.execute("CREATE TABLE IF NOT EXISTS Source(id TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (id))")
-
             cur.execute("""CREATE TABLE IF NOT EXISTS Series(
                 timestamp DATE DEFAULT (datetime('now','localtime')),
                 id       TEXT NOT NULL,
@@ -304,17 +301,3 @@ class ComicCacher:
             vals.append(True)  # If the cache is complete and this isn't complete we don't update it
 
         cur.execute(sql_ins, vals)
-
-
-def adapt_datetime_iso(val: datetime.datetime) -> str:
-    """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
-    return val.isoformat()
-
-
-def convert_datetime(val: bytes) -> datetime.datetime:
-    """Convert ISO 8601 datetime to datetime.datetime object."""
-    return datetime.datetime.fromisoformat(val.decode())
-
-
-sqlite3.register_adapter(datetime.datetime, adapt_datetime_iso)
-sqlite3.register_converter("datetime", convert_datetime)

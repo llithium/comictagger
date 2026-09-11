@@ -172,7 +172,7 @@ def generate_password_textbox(option: settngs.Setting, layout: QtWidgets.QGridLa
 
 
 def generate_path_textbox(option: settngs.Setting, layout: QtWidgets.QGridLayout) -> QtWidgets.QLineEdit:
-    def open_file_picker() -> None:
+    def open_file_picker(*_args: bool) -> None:
         if widget.text():
             current_path = Path(widget.text())
         else:
@@ -190,7 +190,7 @@ def generate_path_textbox(option: settngs.Setting, layout: QtWidgets.QGridLayout
     layout.addWidget(widget, row, 1)
 
     browse_button = QtWidgets.QPushButton("Browse")
-    browse_button.clicked.connect(partial(open_file_picker))
+    browse_button.clicked.connect(open_file_picker)
     layout.addWidget(browse_button, row, 2)
 
     return widget
@@ -202,8 +202,9 @@ def generate_talker_info(talker: ComicTalker, config: settngs.Config[ct_ns], lay
     # Add a horizontal layout to break link from options below
     talker_info_layout = QtWidgets.QHBoxLayout()
 
+    logo_container = QtWidgets.QWidget()
     logo = CoverImageWidget(
-        talker_info_layout.parentWidget(),
+        logo_container,
         CoverImageWidget.URLMode,
         config.values.Runtime_Options__config.user_cache_dir,
         False,
@@ -212,10 +213,10 @@ def generate_talker_info(talker: ComicTalker, config: settngs.Config[ct_ns], lay
     logo.setFixedSize(100, 100)
     logo.set_url(talker.logo_url)
 
-    grid_logo = QtWidgets.QGridLayout(talker_info_layout.parentWidget())
+    grid_logo = QtWidgets.QGridLayout(logo_container)
     grid_logo.addWidget(logo)
     grid_logo.setContentsMargins(0, 0, 0, 0)
-    talker_info_layout.addLayout(grid_logo, 2)
+    talker_info_layout.addWidget(logo_container, 2)
 
     about = QtWidgets.QTextBrowser()
     about.setOpenExternalLinks(True)

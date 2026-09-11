@@ -144,8 +144,8 @@ def test_search(cbz, config, comicvine_api):
             ),
         ),
     )
-    for r, e in zip(issues, [cv_expected]):
-        assert r == e
+    assert result == comictaggerlib.issueidentifier.Result.single_good_match
+    assert issues == [cv_expected]
 
 
 def test_search_network_failure_is_not_reported_as_no_match(cbz, config, comicvine_api, monkeypatch):

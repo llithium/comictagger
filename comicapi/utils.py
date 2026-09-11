@@ -648,8 +648,8 @@ class ImprintDict(dict[str, str]):
     if the key does not exist the key is returned as the publisher unchanged
     """
 
-    def __init__(self, publisher: str, mapping: Mapping[str, str] = {}, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(mapping, **kwargs)
+    def __init__(self, publisher: str, mapping: Mapping[str, str] | None = None, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(mapping if mapping is not None else {}, **kwargs)
         self.publisher = publisher
 
     def __missing__(self, key: str) -> None:

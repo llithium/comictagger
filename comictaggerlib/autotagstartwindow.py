@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to confirm and set config for auto-tag"""
+"""A PyQt6 dialog to confirm and configure auto-tagging."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to enter app settings"""
+"""A PyQt6 dialog to edit application settings."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors
@@ -285,7 +285,6 @@ class SettingsWindow(QtWidgets.QDialog):
         self.cbxRemoveC2C.clicked.connect(self.filename_parser_test)
         self.cbxRemoveFCBD.clicked.connect(self.filename_parser_test)
         self.cbxRemovePublisher.clicked.connect(self.filename_parser_test)
-        self.cbxProtofoliusIssueNumberScheme.clicked.connect(self.filename_parser_test)
         self.cbxProtofoliusIssueNumberScheme.clicked.connect(self.protofolius_clicked)
         self.cbxAllowIssueStartWithLetter.clicked.connect(self.filename_parser_test)
         self.cbxSplitWords.clicked.connect(self.filename_parser_test)

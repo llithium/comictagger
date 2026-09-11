@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to confirm rename"""
+"""A PyQt6 dialog to confirm a rename."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors
@@ -83,7 +83,7 @@ class RenameWindow(QtWidgets.QDialog):
 
         self.addAction(cancel)
 
-    def config_renamer(self, ca: ComicArchive, md: GenericMetadata = GenericMetadata()) -> tuple[str, Exception | None]:
+    def config_renamer(self, ca: ComicArchive, md: GenericMetadata | None = None) -> tuple[str, Exception | None]:
         self.renamer.set_template(self.config[0].File_Rename__template)
         self.renamer.set_issue_zero_padding(self.config[0].File_Rename__issue_number_padding)
         self.renamer.set_smart_cleanup(self.config[0].File_Rename__use_smart_string_cleanup)

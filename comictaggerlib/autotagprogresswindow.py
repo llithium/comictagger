@@ -1,4 +1,4 @@
-"""A PyQT4 dialog to show ID log and progress"""
+"""A PyQt6 dialog to show identification progress and logs."""
 
 #
 # Copyright 2012-2014 ComicTagger Authors

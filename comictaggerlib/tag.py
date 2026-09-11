@@ -114,16 +114,19 @@ def identify_comic(
         ct_md = talker.fetch_comic_data(issue_id=matches[0].md.issue_id, on_rate_limit=on_rate_limit)
     except TalkerError as e:
         logger.exception("Error retrieving issue details. Save aborted. %s", e)
-        ct_md = GenericMetadata()
-
-    ct_md = prepare_metadata(md, ct_md, config)
-
-    if ct_md.is_empty:
         res.status = Status.fetch_data_failure
         res.match_status = MatchStatus.good_match
-
         match_results.fetch_data_failures.append(res)
         return res, match_results
+
+    if ct_md is None or ct_md.is_empty:
+        logger.error("Online search returned no issue details. Save aborted")
+        res.status = Status.fetch_data_failure
+        res.match_status = MatchStatus.good_match
+        match_results.fetch_data_failures.append(res)
+        return res, match_results
+
+    ct_md = prepare_metadata(md, ct_md, config)
 
     res.status = Status.success
     res.md = ct_md

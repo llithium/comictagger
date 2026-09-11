@@ -88,21 +88,6 @@ try:
 
         def new_web_view(parent: QWidget) -> QWebEngineView: ...
 
-    def center_window_on_screen(window: QtWidgets.QWidget) -> None:
-        """Center the window on screen.
-
-        This implementation will handle the window
-        being resized or the screen resolution changing.
-        """
-        # Get the current screens' dimensions...
-        screen = QtGui.QGuiApplication.primaryScreen().geometry()
-        # The horizontal position is calculated as (screen width - window width) / 2
-        hpos = int((screen.width() - window.width()) / 2)
-        # And vertical position the same, but with the height dimensions
-        vpos = int((screen.height() - window.height()) / 2)
-        # And the move call repositions the window
-        window.move(hpos, vpos)
-
     def center_window_on_parent(window: QtWidgets.QWidget) -> None:
         top_level = window
         while top_level.parent() is not None:

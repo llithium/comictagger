@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -10,8 +11,24 @@ from testing.comicdata import search_results
 
 def test_create_cache(config, mock_version):
     config, definitions = config
-    comictalker.comiccacher.ComicCacher(config.Runtime_Options__config.user_cache_dir, mock_version[0])
-    assert config.Runtime_Options__config.user_cache_dir.exists()
+    cache_dir = config.Runtime_Options__config.user_cache_dir
+    cache = comictalker.comiccacher.ComicCacher(cache_dir, mock_version[0])
+
+    cache.add_search_results(
+        "test",
+        "versioned search",
+        [comictalker.comiccacher.Series(id="1", data=b"{}")],
+        True,
+    )
+    cache.close()
+
+    reset_cache = comictalker.comiccacher.ComicCacher(cache_dir, mock_version[0] + ".next")
+    assert reset_cache.get_search_results("test", "versioned search") == []
+
+    assert (cache_dir / "cache_version.txt").read_text() == mock_version[0] + ".next"
+    with sqlite3.connect(cache_dir / "comic_cache.db") as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"SeriesSearchCache", "Series", "Issues"} <= tables
 
 
 def test_search_results(comic_cache):

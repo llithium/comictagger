@@ -365,8 +365,13 @@ class ComicVineTalker(ComicTalker):
                 on_rate_limit=on_rate_limit,
             )
 
+            page_result_count = cv_response["number_of_page_results"]
+            if page_result_count <= 0:
+                logger.warning("Comic Vine returned an empty page before all results were received")
+                break
+
             search_results.extend(cv_response["results"])
-            current_result_count += cv_response["number_of_page_results"]
+            current_result_count += page_result_count
 
             if callback is not None:
                 callback(current_result_count, total_result_count)
@@ -502,13 +507,15 @@ class ComicVineTalker(ComicTalker):
         total_result_count = cv_response["number_of_total_results"]
 
         filtered_issues_result = cv_response["results"]
-        page = 1
         offset = 0
 
         # see if we need to keep asking for more pages...
         while current_result_count < total_result_count:
-            page += 1
-            offset += cv_response["number_of_page_results"]
+            page_result_count = cv_response["number_of_page_results"]
+            if page_result_count <= 0:
+                logger.warning("Comic Vine returned an empty page before all issues were received")
+                break
+            offset += page_result_count
 
             params["offset"] = offset
             cv_response = self._get_cv_content(
@@ -518,7 +525,11 @@ class ComicVineTalker(ComicTalker):
             )
 
             filtered_issues_result.extend(cv_response["results"])
-            current_result_count += cv_response["number_of_page_results"]
+            page_result_count = cv_response["number_of_page_results"]
+            if page_result_count <= 0:
+                logger.warning("Comic Vine returned an empty page before all issues were received")
+                break
+            current_result_count += page_result_count
 
         cvc.add_issues_info(
             self.id,
@@ -832,7 +843,7 @@ class ComicVineTalker(ComicTalker):
             try:
                 series.web_links = [parse_url(url)]
             except LocationParseError:
-                ...
+                logger.debug("Ignoring invalid Comic Vine series URL: %s", url, exc_info=True)
         return series
 
     def _fetch_issues_in_series(
@@ -874,13 +885,15 @@ class ComicVineTalker(ComicTalker):
         total_result_count = cv_response["number_of_total_results"]
 
         series_issues_result = cv_response["results"]
-        page = 1
         offset = 0
 
         # see if we need to keep asking for more pages...
         while current_result_count < total_result_count:
-            page += 1
-            offset += cv_response["number_of_page_results"]
+            page_result_count = cv_response["number_of_page_results"]
+            if page_result_count <= 0:
+                logger.warning("Comic Vine returned an empty page before all issues were received")
+                break
+            offset += page_result_count
 
             params["offset"] = offset
             cv_response = self._get_cv_content(
@@ -890,7 +903,11 @@ class ComicVineTalker(ComicTalker):
             )
 
             series_issues_result.extend(cv_response["results"])
-            current_result_count += cv_response["number_of_page_results"]
+            page_result_count = cv_response["number_of_page_results"]
+            if page_result_count <= 0:
+                logger.warning("Comic Vine returned an empty page before all issues were received")
+                break
+            current_result_count += page_result_count
         # Format to expected output
         formatted_series_issues_result = [
             self._map_comic_issue_to_metadata(
@@ -1053,7 +1070,7 @@ class ComicVineTalker(ComicTalker):
             try:
                 md.web_links = [parse_url(url)]
             except LocationParseError:
-                ...
+                logger.debug("Ignoring invalid Comic Vine issue URL: %s", url, exc_info=True)
         if issue.get("image") is not None:
             md._cover_image = ImageHash(URL=issue.get("image", {}).get("super_url", ""), Hash=0, Kind="")
 
