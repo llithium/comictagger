@@ -62,5 +62,6 @@ jobs:
       - name: Run validation matrix
         run: |
           export TOX_OVERRIDE='testenv.install_command=python -I -m pip install --only-binary PyQt6 --only-binary PyQt6-WebEngine {opts} {packages}'
+          export QT_QPA_PLATFORM=offscreen
           python -m tox p
         shell: bash

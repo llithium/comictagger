@@ -37,7 +37,7 @@ python -m tox -e format-check
 Run the full local validation matrix before submitting a change:
 
 ```bash
-python -m tox p
+QT_QPA_PLATFORM=offscreen python -m tox p
 ```
 
 This runs the non-mutating formatting checks, flake8, and the enforced mypy
