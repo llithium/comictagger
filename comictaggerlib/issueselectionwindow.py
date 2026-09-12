@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import TYPE_CHECKING
 
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -25,6 +26,7 @@ from comicapi.genericmetadata import GenericMetadata
 from comicapi.issuestring import IssueString
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.ctsettings import ct_ns
+from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.seriesselectionwindow import SelectionWindow
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
@@ -47,6 +49,7 @@ class IssueNumberTableWidgetItem(QtWidgets.QTableWidgetItem):
 
 class QueryThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
     finish = QtCore.pyqtSignal(list)
+    error = QtCore.pyqtSignal(object)
     ratelimit = QtCore.pyqtSignal(float, float)
 
     def __init__(
@@ -70,6 +73,11 @@ class QueryThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifica
             ]
         except TalkerError as e:
             logger.exception("Failed to retrieve issue list: %s", e)
+            self.error.emit(e)
+            return
+        except Exception as e:
+            logger.exception("Unexpected error while retrieving issue list")
+            self.error.emit(e)
             return
 
         self.finish.emit(issue_list)
@@ -117,9 +125,29 @@ class IssueSelectionWindow(SelectionWindow[GenericMetadata]):
             self.series_id,
         )
         self.querythread.finish.connect(self.finish)
-        self.querythread.finish.connect(prog_dialog.close)
+        self.querythread.error.connect(self.query_error)
+        self.querythread.finished.connect(prog_dialog.close)
         self.querythread.ratelimit.connect(self.ratelimit)
         self.querythread.start()
+
+    def query_error(self, error: Exception) -> None:
+        parent = self.parentWidget()
+        if not isinstance(parent, QtWidgets.QWidget):
+            parent = None
+
+        if isinstance(error, TalkerError):
+            title = f"{error.source} {error.code_name} Error"
+            message = str(error)
+        else:
+            title = "Issue Retrieval Error"
+            message = f"Could not retrieve issues: {error}"
+
+        OptionalMessageDialog.critical(
+            parent,
+            title,
+            message,
+            details="".join(traceback.format_exception(type(error), error, error.__traceback__)),
+        )
 
     def query_finished(self, issues: list[GenericMetadata]) -> None:
         self.twList.setRowCount(0)
