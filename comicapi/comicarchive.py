@@ -24,10 +24,11 @@ import logging
 import os
 import pathlib
 import shutil
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from comicapi import utils
 from comicapi.archivers import Archiver, UnknownArchiver, ZipArchiver
+from comicapi.archivers.archiver import BulkRemoveArchiver, read_archive
 from comicapi.genericmetadata import FileHash, GenericMetadata
 from comicapi.tags import Tag
 from comictaggerlib.ctversion import version
@@ -268,14 +269,14 @@ class ComicArchive:
             return False
         return tags[tag_id].remove_tags(self.archiver)
 
-    def get_page(self, index: int) -> bytes:
+    def get_page(self, index: int, *, reader: Callable[[str], bytes] | None = None) -> bytes:
         image_data = b""
 
         filename = self.get_page_name(index)
 
         if filename:
             try:
-                image_data = self.archiver.read_file(filename) or b""
+                image_data = (reader or self.archiver.read_file)(filename) or b""
             except Exception:
                 logger.exception("Error reading in page %d. Substituting logo page.", index)
                 image_data = ComicArchive.logo_data
@@ -358,12 +359,13 @@ class ComicArchive:
         """Remove image files from the archive and return the indexes successfully removed."""
         page_names = self.get_page_name_list().copy()
         indexes = sorted({index for index in page_indexes if 0 <= index < len(page_names)}, reverse=True)
-        removed: list[int] = []
-        for index in indexes:
-            if self.archiver.remove_file(page_names[index]):
-                removed.append(index)
-            else:
-                logger.error("Failed to remove page %d (%s) from %s", index, page_names[index], self.path)
+        if isinstance(self.archiver, BulkRemoveArchiver):
+            removed_names = set(self.archiver.remove_files([page_names[index] for index in indexes]))
+            removed = [index for index in indexes if page_names[index] in removed_names]
+        else:
+            removed = [index for index in indexes if self.archiver.remove_file(page_names[index])]
+        for index in set(indexes).difference(removed):
+            logger.error("Failed to remove page %d (%s) from %s", index, page_names[index], self.path)
 
         if removed:
             self.reset_cache()
@@ -414,25 +416,26 @@ class ComicArchive:
                 logger.exception("Failed to calculate original hash for '%s'", self.archiver.path)
         if not calc_page_sizes:
             return
-        for p in md.pages:
-            if p.byte_size is None or p.height is None or p.width is None or p.double_page is None:
-                try:
-                    data = self.get_page(p.archive_index)
-                    p.byte_size = len(data)
-                    if not data or not self.__import_pil__():
-                        continue
+        with read_archive(self.archiver) as reader:
+            for p in md.pages:
+                if p.byte_size is None or p.height is None or p.width is None or p.double_page is None:
+                    try:
+                        data = self.get_page(p.archive_index, reader=reader)
+                        p.byte_size = len(data)
+                        if not data or not self.__import_pil__():
+                            continue
 
-                    from PIL import Image
+                        from PIL import Image
 
-                    im = Image.open(io.BytesIO(data))
-                    w, h = im.size
+                        im = Image.open(io.BytesIO(data))
+                        w, h = im.size
 
-                    p.height = h
-                    p.width = w
-                    if detect_double_page:
-                        p.double_page = p.is_double_page()
-                except Exception as e:
-                    logger.exception("Error decoding image [%s] %s :: image %s", e, self.path, p.archive_index)
+                        p.height = h
+                        p.width = w
+                        if detect_double_page:
+                            p.double_page = p.is_double_page()
+                    except Exception as e:
+                        logger.exception("Error decoding image [%s] %s :: image %s", e, self.path, p.archive_index)
 
     def metadata_from_filename(
         self,

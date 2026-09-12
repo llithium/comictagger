@@ -200,3 +200,87 @@ def test_crop_border(cbz, config, comicvine_api):
     assert cropped.width == fg.width
     assert cropped.height == fg.height
     assert list(cropped.get_flattened_data()) == list(fg.get_flattened_data())
+
+
+@pytest.fixture
+def identifier(config, comicvine_api):
+    config, _ = config
+    return comictaggerlib.issueidentifier.IssueIdentifier(
+        comictaggerlib.issueidentifier.IssueIdentifierOptions(
+            series_match_search_thresh=config.Issue_Identifier__series_match_search_thresh,
+            series_match_identify_thresh=config.Issue_Identifier__series_match_identify_thresh,
+            use_publisher_filter=config.Auto_Tag__use_publisher_filter,
+            publisher_filter=config.Auto_Tag__publisher_filter,
+            quiet=config.Runtime_Options__quiet,
+            cache_dir=config.Runtime_Options__config.user_cache_dir,
+            border_crop_percent=config.Issue_Identifier__border_crop_percent,
+            talker=comicvine_api,
+            tpb_detection=config.Issue_Identifier__tpb_detection,
+        ),
+        None,
+    )
+
+
+def test_good_match_does_not_load_alternate_pages(identifier, cbz, monkeypatch):
+    from unittest.mock import Mock
+
+    extra = Mock(side_effect=AssertionError("Alternate pages should remain unread"))
+    monkeypatch.setattr(identifier, "_get_extra_images", extra)
+    result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+    assert result == comictaggerlib.issueidentifier.Result.single_good_match
+    assert matches
+    extra.assert_not_called()
+
+
+def test_fallback_reuses_hashes_and_loads_extra_pages_once(identifier, cbz, monkeypatch):
+    from unittest.mock import Mock
+
+    calculate_hash = Mock(side_effect=[0, (1 << 64) - 1])
+    monkeypatch.setattr(identifier, "calculate_hash", calculate_hash)
+    image = Image.new("L", (32, 32))
+    extra = Mock(return_value=[("extra", image)])
+    issue = comicapi.genericmetadata.GenericMetadata(
+        issue="1", _cover_image=comicapi.genericmetadata.ImageHash(URL="", Kind="ahash", Hash=(1 << 64) - 1)
+    )
+    series = comicapi.genericmetadata.ComicSeries(
+        id="test",
+        name="Test",
+        aliases=set(),
+        count_of_issues=1,
+        count_of_volumes=None,
+        description="",
+        image_url="",
+        publisher="",
+        start_year=None,
+        format=None,
+    )
+    terms = identifier._get_search_keys(issue)
+    matches, _ = identifier._cover_matching(terms, [("cover", image)], extra, [(series, issue)])
+    assert calculate_hash.call_count == 2
+    extra.assert_called_once_with()
+    assert matches[0].distance == 0
+    assert matches[0].score.local_hash_name == "extra"
+
+
+def test_remote_hash_cache_respects_algorithm_and_cancellation(identifier, cbz, monkeypatch):
+    from unittest.mock import Mock
+
+    fetch = Mock(return_value=cbz.get_page(0))
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fetch)
+    original = identifier._get_remote_hashes(["cover", "cover"])
+    assert original[0] == original[1]
+    assert fetch.call_count == 1
+    identifier.image_hasher = 3
+    alternate = identifier._get_remote_hashes(["cover"])
+    assert alternate[0][1] != original[0][1]
+    assert fetch.call_count == 2
+    identifier.cancel = True
+    with pytest.raises(comictaggerlib.issueidentifier.IssueIdentifierCancelled):
+        identifier._get_remote_hashes(["cover"])
+
+
+def test_new_identification_clears_remote_hash_cache(identifier, cbz, monkeypatch):
+    identifier._remote_hashes[("previous", 1)] = 42
+    monkeypatch.setattr(identifier, "_check_requirements", lambda archive: False)
+    identifier.identify(cbz, cbz.read_tags("cr"))
+    assert identifier._remote_hashes == {}

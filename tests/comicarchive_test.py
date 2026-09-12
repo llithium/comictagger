@@ -182,3 +182,76 @@ def test_rename_ro_dest(tmp_comic, tmp_path):
     assert old_path.exists()
     assert tmp_comic.path.exists()
     assert tmp_comic.path == old_path
+
+
+def test_page_scan_shares_reader_and_releases_it(tmp_comic, monkeypatch):
+    from unittest.mock import Mock
+
+    from comicapi.archivers.archiver import read_archive
+
+    tmp_comic.get_page_name_list()
+    md = comicapi.genericmetadata.GenericMetadata()
+    factory = Mock(wraps=comicapi.archivers.zip.ZipFile)
+    monkeypatch.setattr(comicapi.archivers.zip, "ZipFile", factory)
+    tmp_comic.apply_archive_info_to_metadata(md, True, True)
+
+    assert factory.call_count == 1
+    assert all(p.width and p.height and p.byte_size for p in md.pages)
+    # A later session must see writes made after the first reader was closed.
+    assert tmp_comic.archiver.write_file("new.txt", b"new contents")
+    with read_archive(tmp_comic.archiver) as read:
+        assert read("new.txt") == b"new contents"
+
+
+def test_bulk_delete_preserves_remaining_contents_and_comment(tmp_comic, monkeypatch):
+    from unittest.mock import Mock
+
+    original = {name: tmp_comic.archiver.read_file(name) for name in tmp_comic.archiver.get_filename_list()}
+    names = tmp_comic.get_page_name_list().copy()
+    assert len(names) >= 2
+    tmp_comic.archiver.set_comment("Preserved comment")
+    repacks = Mock()
+    original_repack = comicapi.archivers.zip.ZipFile.repack
+
+    def repack(archive, removed):
+        repacks()
+        return original_repack(archive, removed)
+
+    monkeypatch.setattr(comicapi.archivers.zip.ZipFile, "repack", repack)
+    assert tmp_comic.remove_pages([0, 1, 1, -1, 99999]) == [0, 1]
+    assert repacks.call_count == 1
+    assert tmp_comic.get_page_name_list() == names[2:]
+    assert tmp_comic.archiver.get_comment() == "Preserved comment"
+    remaining = {name: tmp_comic.archiver.read_file(name) for name in tmp_comic.archiver.get_filename_list()}
+    assert remaining == {name: data for name, data in original.items() if name not in names[:2]}
+
+
+def test_legacy_archiver_bulk_fallback_and_partial_failure(tmp_comic):
+    from comicapi.archivers.archiver import read_archive
+
+    underlying = tmp_comic.archiver
+    names = tmp_comic.get_page_name_list().copy()
+
+    class LegacyArchiver:
+        def read_file(self, name):
+            return underlying.read_file(name)
+
+        def remove_file(self, name):
+            return name != names[0] and underlying.remove_file(name)
+
+    tmp_comic.archiver = LegacyArchiver()
+    with read_archive(tmp_comic.archiver) as read:
+        assert read(names[0]) == underlying.read_file(names[0])
+    assert tmp_comic.remove_pages([0, 1]) == [1]
+    assert names[0] in underlying.get_filename_list()
+    assert names[1] not in underlying.get_filename_list()
+
+
+def test_page_scan_continues_after_bad_image(tmp_comic):
+    name = tmp_comic.get_page_name_list()[0]
+    assert tmp_comic.archiver.write_file(name, b"invalid image")
+    md = comicapi.genericmetadata.GenericMetadata()
+    tmp_comic.apply_archive_info_to_metadata(md, True, True)
+    assert md.pages[0].byte_size == len(b"invalid image")
+    assert md.pages[0].width is None
+    assert all(p.width and p.height for p in md.pages[1:])

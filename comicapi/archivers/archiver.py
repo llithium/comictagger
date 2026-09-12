@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pathlib
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+from contextlib import AbstractContextManager, nullcontext
 from typing import Protocol, runtime_checkable
 
 
@@ -144,3 +145,24 @@ class Archiver(Protocol):
         archiver = cls()
         archiver.path = path
         return archiver
+
+
+@runtime_checkable
+class ReadSessionArchiver(Protocol):
+    """Optional capability for sharing a reader within one operation."""
+
+    def read_session(self) -> AbstractContextManager[Callable[[str], bytes]]: ...
+
+
+@runtime_checkable
+class BulkRemoveArchiver(Protocol):
+    """Optional capability returning filenames removed or already absent."""
+
+    def remove_files(self, archive_files: Collection[str]) -> list[str]: ...
+
+
+def read_archive(archive: Archiver) -> AbstractContextManager[Callable[[str], bytes]]:
+    # Keep existing third-party archivers compatible without requiring new methods.
+    if isinstance(archive, ReadSessionArchiver):
+        return archive.read_session()
+    return nullcontext(archive.read_file)

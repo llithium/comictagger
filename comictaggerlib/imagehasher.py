@@ -17,11 +17,9 @@
 from __future__ import annotations
 
 import io
-import itertools
 import logging
 import math
 import statistics
-from collections.abc import Sequence
 from statistics import median
 from typing import TypeVar, cast
 
@@ -32,6 +30,9 @@ try:
 except ImportError:
     pil_available = False
 logger = logging.getLogger(__name__)
+
+
+_DCT_WEIGHTS = tuple(tuple(math.cos(math.pi * k * (2 * n + 1) / 64) for n in range(32)) for k in range(8))
 
 
 class ImageHasher:
@@ -107,50 +108,6 @@ class ImageHasher:
         Implementation follows http://www.hackerfactor.com/blog/index.php?/archives/432-Looks-Like-It.html
         """
 
-        def generate_dct2(block: Sequence[Sequence[float | int]], axis: int = 0) -> list[list[float | int]]:
-            def dct1(block: Sequence[float | int]) -> list[float | int]:
-                """Perform 1D Discrete Cosine Transform (DCT) on a given block."""
-                N = len(block)
-                dct_block = [0.0] * N
-
-                for k in range(N):
-                    sum_val = 0.0
-                    for n in range(N):
-                        cos_val = math.cos(math.pi * k * (2 * n + 1) / (2 * N))
-                        sum_val += block[n] * cos_val
-                    dct_block[k] = sum_val
-
-                return dct_block
-
-            """Perform 2D Discrete Cosine Transform (DCT) on a given block along the specified axis."""
-            rows = len(block)
-            cols = len(block[0])
-            dct_block: list[list[float | int]] = [[0.0] * cols for _ in range(rows)]
-
-            if axis == 0:
-                # Apply 1D DCT on each row
-                for i in range(rows):
-                    dct_block[i] = dct1(block[i])
-            elif axis == 1:
-                # Apply 1D DCT on each column
-                for j in range(cols):
-                    column = [block[i][j] for i in range(rows)]
-                    dct_column = dct1(column)
-                    for i in range(rows):
-                        dct_block[i][j] = dct_column[i]
-            else:
-                raise ValueError("Invalid axis value. Must be either 0 or 1.")
-
-            return dct_block
-
-        def convert_to_2d_array(data: Sequence[float | int]) -> Sequence[Sequence[float | int]]:
-
-            pixels2 = []
-            for row in range(32):
-                x = row * 32
-                pixels2.append(data[x : x + 32])
-            return pixels2
-
         highfreq_factor = 4
         img_size = 8 * highfreq_factor
 
@@ -160,11 +117,25 @@ class ImageHasher:
             logger.exception("p_hash error converting to greyscale and resizing")
             return 0
 
-        # This is always a float because of the .convert("L") above
-        pixels = convert_to_2d_array(cast(tuple[float], image.get_flattened_data()))
-
-        dct = generate_dct2(generate_dct2(pixels, axis=0), axis=1)
-        dctlowfreq = list(itertools.chain.from_iterable(row[:8] for row in dct[:8]))
+        # Compute only the 8x8 low-frequency block. Keep the original accumulation
+        # order so floating-point rounding does not change the hash.
+        pixels = cast(tuple[int, ...], image.get_flattened_data())
+        rows = []
+        for y in range(32):
+            row = []
+            for weights in _DCT_WEIGHTS:
+                value = 0.0
+                for x in range(32):
+                    value += pixels[y * 32 + x] * weights[x]
+                row.append(value)
+            rows.append(row)
+        dctlowfreq = []
+        for weights in _DCT_WEIGHTS:
+            for x in range(8):
+                value = 0.0
+                for y in range(32):
+                    value += rows[y][x] * weights[y]
+                dctlowfreq.append(value)
         med = median(dctlowfreq)
 
         h = 0

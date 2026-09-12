@@ -98,6 +98,7 @@ class IssueIdentifier:
         self.config = config
         self.talker = config.talker
         self.image_hasher = 1
+        self._remote_hashes: dict[tuple[str, int], int] = {}
 
         # a decent hamming score, good enough to call it a match
         self.min_score_thresh: int = 16
@@ -165,10 +166,11 @@ class IssueIdentifier:
         self.output_function(*args, **kwargs)
 
     def identify(self, ca: ComicArchive, md: GenericMetadata) -> tuple[Result, list[IssueResult]]:
+        self._remote_hashes.clear()
         if not self._check_requirements(ca):
             return Result.no_matches, []
 
-        terms, images, extra_images = self._get_search_terms(ca, md)
+        terms, images = self._get_search_terms(ca, md)
 
         # we need, at minimum, a series and issue number
         if not (terms["series"] and terms["issue_number"]):
@@ -184,7 +186,7 @@ class IssueIdentifier:
 
         self.log_msg(f"Found {len(issues)} series that have an issue #{terms['issue_number']}")
 
-        final_cover_matching, full = self._cover_matching(terms, images, extra_images, issues)
+        final_cover_matching, full = self._cover_matching(terms, images, lambda: self._get_extra_images(ca, md), issues)
         final_cover_matching = self._filter_tpb(md, final_cover_matching)
 
         best_score = 0
@@ -278,6 +280,11 @@ class IssueIdentifier:
     def _get_remote_hashes(self, urls: list[str]) -> list[tuple[str, int]]:
         remote_hashes: list[tuple[str, int]] = []
         for url in urls:
+            key = (url, self.image_hasher)
+            if key in self._remote_hashes:
+                self._user_canceled()
+                remote_hashes.append((url, self._remote_hashes[key]))
+                continue
             try:
                 alt_url_image_data = ImageFetcher(self.config.cache_dir).fetch(url, blocking=True)
             except ImageFetcherException as e:
@@ -290,7 +297,10 @@ class IssueIdentifier:
                 )
             )
 
-            remote_hashes.append((url, self.calculate_hash(alt_url_image_data)))
+            image_hash = self.calculate_hash(alt_url_image_data)
+            if alt_url_image_data:
+                self._remote_hashes[key] = image_hash
+            remote_hashes.append((url, image_hash))
 
             if self.cancel:
                 raise IssueIdentifierCancelled
@@ -431,8 +441,8 @@ class IssueIdentifier:
 
     def _get_search_terms(
         self, ca: ComicArchive, md: GenericMetadata
-    ) -> tuple[SearchKeys, list[tuple[str, Image.Image]], list[tuple[str, Image.Image]]]:
-        return self._get_search_keys(md), self._get_images(ca, md), self._get_extra_images(ca, md)
+    ) -> tuple[SearchKeys, list[tuple[str, Image.Image]]]:
+        return self._get_search_keys(md), self._get_images(ca, md)
 
     def _user_canceled(self, callback: Callable[[], Any] | None = None) -> Any:
         if self.cancel:
@@ -509,13 +519,12 @@ class IssueIdentifier:
     def _match_covers(
         self,
         terms: SearchKeys,
-        images: list[tuple[str, Image.Image]],
+        hashes: list[tuple[str, int]],
         issues: list[tuple[ComicSeries, GenericMetadata]],
         use_alternates: bool,
     ) -> list[IssueResult]:
         assert terms["issue_number"]
         match_results: list[IssueResult] = []
-        hashes = self._calculate_hashes(images)
         counter = 0
         alternate = ""
         if use_alternates:
@@ -699,7 +708,7 @@ class IssueIdentifier:
         self,
         terms: SearchKeys,
         images: list[tuple[str, Image.Image]],
-        extra_images: list[tuple[str, Image.Image]],
+        extra_images: Callable[[], list[tuple[str, Image.Image]]],
         issues: list[tuple[ComicSeries, GenericMetadata]],
     ) -> tuple[list[IssueResult], list[IssueResult]]:
         # Set hashing kind, will presume all hashes are of the same kind
@@ -712,7 +721,8 @@ class IssueIdentifier:
                     self.image_hasher = 1  # Set to 1 on init but might as well be sure
                     break
 
-        cover_matching_1 = self._match_covers(terms, images, issues, use_alternates=False)
+        hashes = self._calculate_hashes(images)
+        cover_matching_1 = self._match_covers(terms, hashes, issues, use_alternates=False)
 
         if not cover_matching_1:
             self.log_msg(":-( no matches!")
@@ -734,7 +744,9 @@ class IssueIdentifier:
             # look at a few more pages in the archive, and also alternate covers online
             self.log_msg("Very weak scores for the cover. Analyzing alternate pages and covers...")
 
-            temp = self._match_covers(terms, images + extra_images, issues, use_alternates=True)
+            temp = self._match_covers(
+                terms, hashes + self._calculate_hashes(extra_images()), issues, use_alternates=True
+            )
             for score in temp:
                 if score.distance < self.min_alternate_score_thresh:
                     cover_matching_2.append(score)

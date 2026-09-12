@@ -6,12 +6,14 @@ import pathlib
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Callable, Collection, Iterator
+from contextlib import ExitStack, contextmanager
 from typing import cast
 
 import chardet
 from zipremove import ZipFile
 
-from comicapi.archivers import Archiver
+from comicapi.archivers.archiver import Archiver, read_archive
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +56,39 @@ class ZipArchiver(Archiver):
                 raise
         return data
 
+    @contextmanager
+    def read_session(self) -> Iterator[Callable[[str], bytes]]:
+        # Open lazily so callers retain their per-file error handling.
+        with ExitStack() as stack:
+            zf: ZipFile | None = None
+
+            def read(archive_file: str) -> bytes:
+                nonlocal zf
+                if zf is None:
+                    zf = stack.enter_context(ZipFile(self.path, mode="r"))
+                return zf.read(archive_file)
+
+            yield read
+
     def remove_file(self, archive_file: str) -> bool:
-        files = self.get_filename_list()
+        return archive_file in self.remove_files([archive_file])
+
+    def remove_files(self, archive_files: Collection[str]) -> list[str]:
+        requested = list(dict.fromkeys(archive_files))
+        if not requested:
+            return []
         self._filename_list = []
         try:
             with ZipFile(self.path, mode="a", allowZip64=True, compression=zipfile.ZIP_DEFLATED) as zf:
-                if archive_file in files:
-                    zf.repack([zf.remove(archive_file)])
-            return True
+                existing = set(zf.namelist())
+                removed = [zf.remove(name) for name in requested if name in existing]
+                if removed:
+                    zf.repack(removed)
+            # Removing an already absent file is a successful no-op, as before.
+            return requested
         except (zipfile.BadZipfile, OSError) as e:
-            logger.error("Error writing zip archive [%s]: %s :: %s", e, self.path, archive_file)
-            return False
+            logger.error("Error writing zip archive [%s]: %s :: %s", e, self.path, requested)
+            return []
 
     def write_file(self, archive_file: str, data: bytes) -> bool:
         files = self.get_filename_list()
@@ -129,9 +153,9 @@ class ZipArchiver(Archiver):
         """Replace the current zip with one copied from another archive"""
         self._filename_list = []
         try:
-            with ZipFile(self.path, mode="w", allowZip64=True) as zout:
+            with ZipFile(self.path, mode="w", allowZip64=True) as zout, read_archive(other_archive) as read:
                 for filename in other_archive.get_filename_list():
-                    data = other_archive.read_file(filename)
+                    data = read(filename)
                     if data is not None:
                         zout.writestr(filename, data)
 
