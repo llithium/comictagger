@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
 
 import pytest
 
@@ -61,6 +63,71 @@ def test_auto_tag_results_are_shown_in_file_list(tmp_path, config, qtbot) -> Non
     file_list.show_search_match(manual_archive)
     assert manual_item.text() == "Search match"
     assert manual_item.toolTip() == "The match was selected through Search Online."
+
+
+def test_loading_paths_does_not_block_the_gui_thread(monkeypatch, config, qtbot) -> None:
+    scan_started = threading.Event()
+    release_scan = threading.Event()
+    gui_remained_responsive = []
+
+    def blocking_cloud_scan(_paths):
+        scan_started.set()
+        release_scan.wait(timeout=1)
+        return []
+
+    monkeypatch.setattr("comictaggerlib.fileselectionlist.utils.get_recursive_filelist", blocking_cloud_scan)
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    QtCore.QTimer.singleShot(0, lambda: (gui_remained_responsive.append(True), release_scan.set()))
+
+    before_load = time.monotonic()
+    file_list.add_path_list(["/cloud/comics"])
+    load_call_duration = time.monotonic() - before_load
+
+    assert load_call_duration < 0.2
+    qtbot.waitUntil(scan_started.is_set)
+    qtbot.waitUntil(lambda: bool(gui_remained_responsive))
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+
+
+def test_probing_cloud_archive_does_not_block_the_gui_thread(monkeypatch, config, qtbot) -> None:
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+
+    class NotAComic:
+        def seems_to_be_a_comic_archive(self):
+            return False
+
+    def blocking_cloud_archive(*_args, **_kwargs):
+        probe_started.set()
+        release_probe.wait(timeout=1)
+        return NotAComic()
+
+    monkeypatch.setattr("comictaggerlib.fileselectionlist.utils.get_recursive_filelist", lambda _paths: ["cloud.cbz"])
+    monkeypatch.setattr("comictaggerlib.fileselectionlist.ComicArchive", blocking_cloud_archive)
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    QtCore.QTimer.singleShot(0, release_probe.set)
+
+    before_load = time.monotonic()
+    file_list.add_path_list(["/cloud/comics"])
+
+    assert time.monotonic() - before_load < 0.2
+    qtbot.waitUntil(probe_started.is_set)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+
+
+def test_loading_paths_adds_archives_after_background_probe(tmp_path, config, qtbot) -> None:
+    source_path = tmp_path / cbz_path.name
+    shutil.copy(cbz_path, source_path)
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+
+    file_list.add_path_list([str(source_path)])
+
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    assert file_list.twList.rowCount() == 1
+    assert file_list.get_current_archive().path == source_path
 
 
 def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:

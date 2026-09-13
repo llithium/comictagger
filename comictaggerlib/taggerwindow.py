@@ -741,8 +741,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         control_pressed = event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
 
         if control_pressed:
-            for folder_archive in self.droppedFiles:
-                self.fileSelectionList.twList.selectRow(self.fileSelectionList.add_path_item(folder_archive)[0])
+            self.fileSelectionList.add_path_list(self.droppedFiles, recursive=False)
         else:
             self.fileSelectionList.add_path_list(self.droppedFiles)
         event.accept()
@@ -1159,7 +1158,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def _load_single_file(self, file: str) -> None:
         if file:
-            self.fileSelectionList.twList.selectRow(self.fileSelectionList.add_path_item(file)[0])
+            self.fileSelectionList.add_path_list([file], recursive=False)
 
     def _load_files(self, files: list[str]) -> None:
         if files:

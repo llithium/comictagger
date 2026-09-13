@@ -21,6 +21,7 @@ import os
 import pathlib
 import platform
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import cast
 
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
@@ -36,6 +37,56 @@ from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedPathItem:
+    archive: ComicArchive
+    archive_type: str
+    tags: tuple[str, ...]
+    writable: bool
+
+
+def prepare_path_item(path: str, nocover_path: str, preferred_hash: str) -> PreparedPathItem | None:
+    archive = ComicArchive(os.path.abspath(path), nocover_path, hash_archive=preferred_hash)
+    if not archive.seems_to_be_a_comic_archive():
+        return None
+
+    return PreparedPathItem(
+        archive=archive,
+        archive_type=archive.archiver.name(),
+        tags=tuple(tag for tag in archive.get_supported_tags() if archive.has_tags(tag)),
+        writable=archive.is_writable(),
+    )
+
+
+class PathLoadThread(QtCore.QThread):
+    progress = QtCore.pyqtSignal(str)
+    loaded = QtCore.pyqtSignal(object)
+    error = QtCore.pyqtSignal(object)
+
+    def __init__(self, paths: list[str], nocover_path: str, preferred_hash: str, recursive: bool) -> None:
+        super().__init__()
+        self.paths = paths
+        self.nocover_path = nocover_path
+        self.preferred_hash = preferred_hash
+        self.recursive = recursive
+
+    def run(self) -> None:
+        try:
+            files = utils.get_recursive_filelist(self.paths) if self.recursive else self.paths
+            prepared_items = []
+            for path in files:
+                if self.isInterruptionRequested():
+                    return
+                self.progress.emit(path)
+                prepared = prepare_path_item(path, self.nocover_path, self.preferred_hash)
+                if prepared is not None:
+                    prepared_items.append(prepared)
+            self.loaded.emit(prepared_items)
+        except Exception as error:
+            logger.exception("Failed while loading comic paths")
+            self.error.emit(error)
 
 
 class FileSelectionList(QtWidgets.QWidget):
@@ -86,6 +137,8 @@ class FileSelectionList(QtWidgets.QWidget):
 
         self.dirty_flag_verification = dirty_flag_verification
         self.rar_ro_shown = False
+        self.path_load_threads: set[PathLoadThread] = set()
+        self.path_load_dialogs: dict[PathLoadThread, QtWidgets.QProgressDialog] = {}
 
     def show_auto_tag_results(self, match_results: OnlineMatchResults) -> None:
         """Show the outcome of the latest Auto-Tag run beside each loaded archive."""
@@ -259,60 +312,53 @@ class FileSelectionList(QtWidgets.QWidget):
         else:
             self.listCleared.emit()
 
-    def add_path_list(self, pathlist: list[str]) -> None:
+    def add_path_list(self, pathlist: list[str], recursive: bool = True) -> None:
         if not pathlist:
             return
-        filelist = utils.get_recursive_filelist(pathlist)
-        # we now have a list of files to add
+        progress_dialog = QtWidgets.QProgressDialog("Finding comic archives…", "Cancel", 0, 0, parent=self)
+        progress_dialog.setWindowTitle("Adding Files")
+        progress_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        progress_dialog.setMinimumDuration(300)
+        center_window_on_parent(progress_dialog)
 
-        progdialog = None
-        if len(filelist) < 3:
-            # Prog dialog on Linux flakes out for small range, so scale up
-            progdialog = QtWidgets.QProgressDialog("", "Cancel", 0, len(filelist), parent=self)
-            progdialog.setWindowTitle("Adding Files")
-            progdialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-            progdialog.setMinimumDuration(300)
-            progdialog.show()
-            center_window_on_parent(progdialog)
+        thread = PathLoadThread(
+            pathlist,
+            str(graphics_path / "nocover.png"),
+            self.config.Runtime_Options__preferred_hash,
+            recursive,
+        )
+        self.path_load_threads.add(thread)
+        self.path_load_dialogs[thread] = progress_dialog
+        progress_dialog.canceled.connect(thread.requestInterruption)
+        thread.progress.connect(progress_dialog.setLabelText)
+        thread.loaded.connect(self._finish_path_load)
+        thread.error.connect(self._path_load_error)
+        thread.finished.connect(self._path_load_finished)
+        thread.start()
 
+    def _finish_path_load(self, prepared_items: list[PreparedPathItem]) -> None:
         first_added = None
         rar_added_ro = False
         self.twList.setSortingEnabled(False)
-        for idx, f in enumerate(filelist):
-            if idx % 10 == 0:
-                QtCore.QCoreApplication.processEvents()
-            if progdialog is not None:
-                if progdialog.wasCanceled():
-                    break
-                progdialog.setValue(idx + 1)
-                progdialog.setLabelText(f)
-
-            row, ca = self.add_path_item(f)
-            if row is not None and ca:
-                if ca.archiver.name() == "RAR" and not ca.archiver.is_writable():
-                    rar_added_ro = True
-                if first_added is None and row != -1:
-                    first_added = row
-
-        if progdialog is not None:
-            progdialog.hide()
-        QtCore.QCoreApplication.processEvents()
+        try:
+            for prepared in prepared_items:
+                row, ca = self._add_prepared_path_item(prepared)
+                if ca:
+                    if prepared.archive_type == "RAR" and not prepared.writable:
+                        rar_added_ro = True
+                    if first_added is None and row != -1:
+                        first_added = row
+        finally:
+            self.twList.setSortingEnabled(True)
 
         if first_added is not None:
             self.twList.selectRow(first_added)
         else:
-            if len(pathlist) == 1 and os.path.isfile(pathlist[0]):
-                OptionalMessageDialog.information(
-                    self, "File Open", "Selected file doesn't seem to be a comic archive."
-                )
-                return
             OptionalMessageDialog.information(self, "File/Folder Open", "No readable comic archives were found.")
             return
 
         if rar_added_ro:
             self.rar_ro_message()
-
-        self.twList.setSortingEnabled(True)
 
         # Adjust column size
         self.twList.resizeColumnsToContents()
@@ -324,6 +370,20 @@ class FileSelectionList(QtWidgets.QWidget):
             self.twList.setColumnWidth(FileSelectionList.fileColNum, 250)
         if self.twList.columnWidth(FileSelectionList.folderColNum) > 200:
             self.twList.setColumnWidth(FileSelectionList.folderColNum, 200)
+
+    def _path_load_error(self, error: Exception) -> None:
+        OptionalMessageDialog.critical(self, "File/Folder Open", f"Failed to load comic archives: {error}")
+
+    def _path_load_finished(self) -> None:
+        thread = self.sender()
+        if not isinstance(thread, PathLoadThread):
+            return
+        dialog = self.path_load_dialogs.pop(thread, None)
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+        self.path_load_threads.discard(thread)
+        thread.deleteLater()
 
     def rar_ro_message(self) -> None:
         if self.rar_ro_shown:
@@ -366,11 +426,20 @@ class FileSelectionList(QtWidgets.QWidget):
         if current_row >= 0:
             return current_row, ca
 
-        ca = ComicArchive(
-            path, str(graphics_path / "nocover.png"), hash_archive=self.config.Runtime_Options__preferred_hash
+        prepared = prepare_path_item(
+            path, str(graphics_path / "nocover.png"), self.config.Runtime_Options__preferred_hash
         )
+        if prepared is None:
+            return -1, None  # type: ignore[return-value]
+        return self._add_prepared_path_item(prepared)
 
-        if ca.seems_to_be_a_comic_archive():
+    def _add_prepared_path_item(self, prepared: PreparedPathItem) -> tuple[int, ComicArchive]:
+        ca = prepared.archive
+        current_row, current_archive = self.get_current_list_row(str(ca.path))
+        if current_row >= 0:
+            return current_row, current_archive
+
+        if ca:
             self.loaded_paths.add(ca.path)
             row: int = self.twList.rowCount()
             self.twList.insertRow(row)
@@ -397,18 +466,18 @@ class FileSelectionList(QtWidgets.QWidget):
             folder_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.twList.setItem(row, FileSelectionList.folderColNum, folder_item)
 
-            item_text = ca.archiver.name()
+            item_text = prepared.archive_type
             type_item.setText(item_text)
             type_item.setData(QtCore.Qt.ItemDataRole.ToolTipRole, item_text)
             type_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.twList.setItem(row, FileSelectionList.typeColNum, type_item)
 
-            md_item.setText(", ".join(x for x in ca.get_supported_tags() if ca.has_tags(x)))
+            md_item.setText(", ".join(prepared.tags))
             md_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             md_item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
             self.twList.setItem(row, FileSelectionList.MDFlagColNum, md_item)
 
-            if not ca.is_writable():
+            if not prepared.writable:
                 readonly_item.setData(QtCore.Qt.ItemDataRole.UserRole, True)
                 readonly_item.setCheckState(QtCore.Qt.CheckState.Checked)
                 readonly_item.setText(" ")
