@@ -14,6 +14,26 @@ from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Statu
 from testing.filenames import cbz_path
 
 
+def test_show_in_finder_reveals_selected_archive(monkeypatch, tmp_path, config, qtbot) -> None:
+    monkeypatch.setattr("comictaggerlib.fileselectionlist.platform.system", lambda: "Darwin")
+    source_path = tmp_path / cbz_path.name
+    shutil.copy(cbz_path, source_path)
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    row, _archive = file_list.add_path_item(str(source_path))
+    file_list.twList.selectRow(row)
+    started_commands = []
+    monkeypatch.setattr(
+        "comictaggerlib.fileselectionlist.QtCore.QProcess.startDetached",
+        lambda program, arguments: started_commands.append((program, arguments)),
+    )
+
+    action = next(action for action in file_list.actions() if action.text() == "Show in Finder")
+    action.trigger()
+
+    assert started_commands == [("open", ["-R", str(source_path)])]
+
+
 def test_auto_tag_results_are_shown_in_file_list(tmp_path, config, qtbot) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()

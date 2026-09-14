@@ -120,6 +120,7 @@ class FileSelectionList(QtWidgets.QWidget):
 
         select_all_action = QtGui.QAction("Select All", self)
         remove_action = QtGui.QAction("Remove Selected Items", self)
+        reveal_action = QtGui.QAction(self.reveal_action_text(), self)
         self.separator = QtGui.QAction("", self)
         self.separator.setSeparator(True)
 
@@ -128,9 +129,11 @@ class FileSelectionList(QtWidgets.QWidget):
 
         select_all_action.triggered.connect(self.select_all)
         remove_action.triggered.connect(self.remove_selection)
+        reveal_action.triggered.connect(self.reveal_current_archive)
 
         self.addAction(select_all_action)
         self.addAction(remove_action)
+        self.addAction(reveal_action)
         self.addAction(self.separator)
 
         self.loaded_paths: set[pathlib.Path] = set()
@@ -139,6 +142,28 @@ class FileSelectionList(QtWidgets.QWidget):
         self.rar_ro_shown = False
         self.path_load_threads: set[PathLoadThread] = set()
         self.path_load_dialogs: dict[PathLoadThread, QtWidgets.QProgressDialog] = {}
+
+    @staticmethod
+    def reveal_action_text() -> str:
+        if platform.system() == "Darwin":
+            return "Show in Finder"
+        if platform.system() == "Windows":
+            return "Show in File Explorer"
+        return "Show in File Manager"
+
+    def reveal_current_archive(self) -> None:
+        archive = self.get_current_archive()
+        if archive is not None:
+            self.reveal_path(archive.path)
+
+    @staticmethod
+    def reveal_path(path: pathlib.Path) -> None:
+        if platform.system() == "Darwin":
+            QtCore.QProcess.startDetached("open", ["-R", str(path)])
+        elif platform.system() == "Windows":
+            QtCore.QProcess.startDetached("explorer.exe", [f"/select,{path}"])
+        else:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path.parent)))
 
     def show_auto_tag_results(self, match_results: OnlineMatchResults) -> None:
         """Show the outcome of the latest Auto-Tag run beside each loaded archive."""
