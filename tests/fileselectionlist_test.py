@@ -14,6 +14,38 @@ from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Statu
 from testing.filenames import cbz_path
 
 
+def test_cancelling_archive_change_restores_selection(tmp_path, config, qtbot) -> None:
+    allow_change = True
+
+    def verify_change(_title, _description):
+        return allow_change
+
+    file_list = FileSelectionList(None, config[0], verify_change)
+    qtbot.addWidget(file_list)
+    paths = [tmp_path / name for name in ("first.cbz", "second.cbz")]
+    for path in paths:
+        shutil.copy(cbz_path, path)
+        file_list.add_path_item(str(path))
+    first_row, first_archive = file_list.get_current_list_row(str(paths[0]))
+    second_row, second_archive = file_list.get_current_list_row(str(paths[1]))
+    file_list.twList.selectRow(first_row)
+    selected_archives = []
+    file_list.selectionChanged.connect(selected_archives.append)
+
+    allow_change = False
+    file_list.twList.selectRow(second_row)
+
+    qtbot.waitUntil(lambda: file_list.get_selected_archive_list() == [first_archive])
+    assert file_list.get_current_archive() == first_archive
+    assert selected_archives == []
+
+    allow_change = True
+    file_list.twList.selectRow(second_row)
+
+    assert file_list.get_current_archive() == second_archive
+    assert selected_archives == [second_archive]
+
+
 def test_show_in_finder_reveals_selected_archive(monkeypatch, tmp_path, config, qtbot) -> None:
     monkeypatch.setattr("comictaggerlib.fileselectionlist.platform.system", lambda: "Darwin")
     source_path = tmp_path / cbz_path.name
