@@ -7,7 +7,7 @@ with a concise description and focused tests.
 ## Supported setup
 
 ComicTagger requires Python 3.10 or newer. The macOS build and CI workflow use
-native Apple Silicon on `macos-14`. CI checks Python 3.10 and 3.14 and builds
+native Apple Silicon on `macos-15`. CI checks Python 3.10 and 3.14 and builds
 the macOS application with Python 3.14. Linux and Windows remain supported by
 the application and package metadata.
 
