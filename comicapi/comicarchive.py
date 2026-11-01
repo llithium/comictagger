@@ -25,6 +25,7 @@ import os
 import pathlib
 import shutil
 from collections.abc import Callable, Iterable
+from typing import cast
 
 from comicapi import utils
 from comicapi.archivers import Archiver, UnknownArchiver, ZipArchiver
@@ -409,7 +410,8 @@ class ComicArchive:
                     length = digest.name.rpartition("_")[2]
                     if not length.isdigit():
                         length = "128"
-                    md.original_hash = FileHash(digest.name, digest.hexdigest(int(length) // 8))  # type: ignore[call-arg]
+                    hexdigest = cast(Callable[[int], str], digest.hexdigest)
+                    md.original_hash = FileHash(digest.name, hexdigest(int(length) // 8))
                 else:
                     md.original_hash = FileHash(digest.name, digest.hexdigest())
             except Exception:
