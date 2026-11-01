@@ -1452,7 +1452,6 @@ Source</string>
     </property>
     <addaction name="actionWiki"/>
     <addaction name="actionReportBug"/>
-    <addaction name="actionComicTaggerForum"/>
     <addaction name="separator"/>
     <addaction name="actionAbout"/>
    </widget>
@@ -1609,11 +1608,6 @@ Source</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+C</string>
-   </property>
-  </action>
-  <action name="actionComicTaggerForum">
-   <property name="text">
-    <string>ComicTagger Discussions...</string>
    </property>
   </action>
   <action name="actionCopyTags">

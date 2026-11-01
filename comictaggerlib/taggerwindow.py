@@ -573,7 +573,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.actionPageBrowser.triggered.connect(self.show_page_browser)
         # Help Menu
         self.actionAbout.triggered.connect(self.about_app)
-        self.actionComicTaggerForum.triggered.connect(self.show_forum)
         self.actionReportBug.triggered.connect(self.report_bug)
         self.actionWiki.triggered.connect(self.show_wiki)
 
@@ -702,8 +701,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.fileSelectionList.add_path_list(new_archives_to_add)
 
     def about_app(self) -> None:
-        website = "https://github.com/comictagger/comictagger"
-        email = "comictagger@gmail.com"
+        website = "https://github.com/llithium/comictagger"
         license_link = "http://www.apache.org/licenses/LICENSE-2.0"
         license_name = "Apache License 2.0"
 
@@ -718,7 +716,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             + "<br>"
             + "&copy;2014-2022 ComicTagger Devs<br><br>"
             + f"<a href='{website}'>{website}</a><br><br>"
-            + f"<a href='mailto:{email}'>{email}</a><br><br>"
             + f"License: <a href='{license_link}'>{license_name}</a>"
         )
         msg_box.addAction(self.actionExit)
@@ -2135,10 +2132,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         webbrowser.open("https://github.com/comictagger/comictagger/wiki")
 
     def report_bug(self) -> None:
-        webbrowser.open("https://github.com/comictagger/comictagger/issues")
-
-    def show_forum(self) -> None:
-        webbrowser.open("https://github.com/comictagger/comictagger/discussions")
+        webbrowser.open("https://github.com/llithium/comictagger/issues")
 
     def front_cover_changed(self) -> None:
         self.metadata.pages = self.page_list_editor.get_page_list()
@@ -2258,12 +2252,14 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.version_check_complete(version_checker.get_latest_version())
 
     def version_check_complete(self, new_version: tuple[str, str]) -> None:
+        if not new_version[0]:
+            return
         if new_version[0] not in (self.version, self.config[0].Dialog_Flags__dont_notify_about_this_version):
             from packaging.version import parse
 
             if parse(new_version[0]) <= parse(self.version):
                 return
-            website = "https://github.com/comictagger/comictagger"
+            website = "https://github.com/llithium/comictagger"
 
             def set_checked(checked: bool) -> None:
                 if checked:

@@ -152,7 +152,7 @@ class RenameWindow(QtWidgets.QDialog):
                     "The formatter has experienced an unexpected error!"
                     f"\n\n{type(e).__name__}: {e}\n\n"
                     "Please open an issue at "
-                    "https://github.com/comictagger/comictagger",
+                    "https://github.com/llithium/comictagger/issues",
                 )
                 return
 

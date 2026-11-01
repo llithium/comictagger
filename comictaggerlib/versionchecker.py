@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class VersionChecker:
     def get_request_url(self) -> tuple[str, dict[str, str]]:
-        base_url = "https://api.github.com/repos/comictagger/comictagger/releases/latest"
+        base_url = "https://api.github.com/repos/llithium/comictagger/releases/latest"
         params: dict[str, str] = {}
 
         return base_url, params
@@ -38,15 +38,18 @@ class VersionChecker:
     def get_latest_version(self) -> tuple[str, str]:
         try:
             url, params = self.get_request_url()
-            release = requests.get(
+            response = requests.get(
                 url,
                 params=params,
                 headers={"user-agent": "comictagger/" + ctversion.version},
-            ).json()
+                timeout=10,
+            )
+            response.raise_for_status()
+            release = response.json()
         except Exception:
             return "", ""
 
-        new_version = release["tag_name"]
+        new_version = release.get("tag_name")
         if new_version is None or new_version == "":
             return "", ""
-        return new_version.strip(), release["name"]
+        return new_version.strip(), release.get("name") or new_version

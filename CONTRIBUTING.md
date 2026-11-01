@@ -1,13 +1,15 @@
 # Contributing
 
-Questions and proposals are welcome in the [Discussions](https://github.com/comictagger/comictagger/discussions/categories/general).
-For changes, please open a [pull request](https://github.com/comictagger/comictagger/pulls) with a concise description and focused tests.
+Report bugs and propose changes in [Issues](https://github.com/llithium/comictagger/issues).
+Open [pull requests](https://github.com/llithium/comictagger/pulls) against `main`
+with a concise description and focused tests.
 
 ## Supported setup
 
 ComicTagger requires Python 3.10 or newer. The macOS build and CI workflow use
-native Apple Silicon on `macos-14`; Linux and Windows remain supported by the
-application and package metadata.
+native Apple Silicon on `macos-14`. CI checks Python 3.10 and 3.14 and builds
+the macOS application with Python 3.14. Linux and Windows remain supported by
+the application and package metadata.
 
 Create and activate a virtual environment, then install tox:
 
@@ -19,8 +21,13 @@ python -m pip install --upgrade pip tox
 
 On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
 The GUI, CBR, and 7z test environments install their optional dependencies
-through tox. The ICU checks also require a working PyICU installation; on
-macOS, install ICU and pkg-config with Homebrew if needed.
+through tox. The ICU checks also require a working PyICU installation. On
+macOS, configure Homebrew's ICU before running tox:
+
+```bash
+brew install icu4c pkg-config
+export PKG_CONFIG_PATH="$(brew --prefix icu4c)/lib/pkgconfig"
+```
 
 ## Checks and tests
 
@@ -53,6 +60,12 @@ Build packages and application artifacts locally with:
 python -m tox r -m build
 ```
 
-This command performs the required checks before building. It may require
-platform-specific packaging tools and optional dependencies. Release automation
-runs `python -m tox p` separately before publishing artifacts.
+This command validates formatting and types before building, without applying
+formatting changes. It may require platform-specific packaging tools and
+optional dependencies.
+
+CI runs on pushes to `main`, pull requests targeting `main`, version tags, and
+manual dispatch. Both Python versions must pass the full validation matrix
+before a version tag can publish a GitHub release. The release includes the
+wheel, source archive, and Apple Silicon DMG. Tags use `1.6.0` for stable releases
+or `1.6.0-beta.1` for prereleases. The workflow does not publish to PyPI.

@@ -616,8 +616,8 @@ class SettingsWindow(QtWidgets.QDialog):
                 "The formatter has experienced an unexpected error!"
                 + f"<br/><br/>{type(self.rename_error).__name__}: {self.rename_error}<br/><br/>"
                 + "Please open an issue at "
-                + "<a href='https://github.com/comictagger/comictagger'>"
-                + "https://github.com/comictagger/comictagger</a>",
+                + "<a href='https://github.com/llithium/comictagger/issues'>"
+                + "https://github.com/llithium/comictagger/issues</a>",
             )
             return
 
