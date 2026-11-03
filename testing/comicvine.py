@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+
+import requests
 
 import comicapi.genericmetadata
 from comicapi import utils
@@ -167,6 +170,7 @@ comic_series_result = comicapi.genericmetadata.ComicSeries(
     publisher=cv_volume_result["results"]["publisher"]["name"],
     start_year=int(cv_volume_result["results"]["start_year"]),
     format=None,
+    web_links=[comicapi.genericmetadata.parse_url(cv_volume_result["results"]["site_detail_url"])],
 )
 date = utils.parse_date_str(cv_issue_result["results"]["cover_date"])
 comic_issue_result = comicapi.genericmetadata.GenericMetadata(
@@ -251,13 +255,9 @@ cv_md = comicapi.genericmetadata.GenericMetadata(
 )
 
 
-class MockResponse:
-    """Mocks the response object from requests"""
-
-    def __init__(self, result: dict[str, Any], content=None) -> None:
-        self.status_code = 200
-        self.result = result
-        self.content = content
-
-    def json(self) -> dict[str, list[Any]]:
-        return self.result
+def response(result: dict[str, Any], content: bytes | None = None) -> requests.Response:
+    """Build a real HTTP response with a fixture JSON or image body."""
+    result_response = requests.Response()
+    result_response.status_code = 200
+    result_response._content = content if content is not None else json.dumps(result).encode("utf-8")
+    return result_response

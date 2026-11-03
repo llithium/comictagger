@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import logging
+import dataclasses
 import pathlib
 import types
 import typing
@@ -14,8 +14,6 @@ from appdirs import AppDirs
 from comicapi import utils
 from comicapi.comicarchive import tags
 from comicapi.genericmetadata import REMOVE, GenericMetadata
-
-logger = logging.getLogger(__name__)
 
 
 class ComicTaggerPaths(AppDirs):
@@ -86,9 +84,11 @@ def tag(types: str) -> list[str]:
 
 
 def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
+    metadata_types = get_type_hints(GenericMetadata)
+    fields = {field.name for field in dataclasses.fields(GenericMetadata)}
 
-    def get_type(key: str, tt: Any = get_type_hints(GenericMetadata)) -> Any:
-        t: Any = tt.get(key, None)
+    def get_type(key: str) -> Any:
+        t: Any = metadata_types.get(key)
         if t is None:
             return None
         if getattr(t, "__origin__", None) is typing.Union and len(t.__args__) == 2 and t.__args__[1] is type(None):
@@ -128,16 +128,20 @@ def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
             p = pathlib.Path(mdstr[1:])
             if not p.is_file():
                 raise argparse.ArgumentTypeError("Invalid filepath")
-            mdstr = p.read_text()
+            mdstr = p.read_text(encoding="utf-8")
+            if not mdstr.strip():
+                return md
         if mdstr[0] != "{":
             mdstr = "{" + mdstr + "}"
 
         md_dict = yaml.safe_load(mdstr)
+        if not isinstance(md_dict, Mapping):
+            raise argparse.ArgumentTypeError("Metadata must be a mapping of tag names to values")
 
         empty = True
         # Map the dict to the metadata object
         for key, value in md_dict.items():
-            if hasattr(md, key):
+            if key in fields:
                 t = get_type(key)
                 if value is None:
                     value = REMOVE
@@ -162,9 +166,8 @@ def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
             else:
                 raise argparse.ArgumentTypeError(f"'{key}' is not a valid tag name")
         md.is_empty = empty
-    except argparse.ArgumentTypeError as e:
-        raise e
-    except Exception as e:
-        logger.exception("Unable to read metadata from the commandline '%s'", mdstr)
-        raise Exception("Unable to read metadata from the commandline") from e
+    except argparse.ArgumentTypeError:
+        raise
+    except (yaml.YAMLError, OSError, UnicodeError, ValueError, TypeError) as e:
+        raise argparse.ArgumentTypeError(f"Unable to read metadata: {e}") from e
     return md

@@ -8,7 +8,6 @@ import settngs
 
 import comicapi.comicarchive
 import comicapi.utils
-import comictaggerlib.ctsettings
 from comicapi.comicarchive import Archiver
 from comictaggerlib.ctsettings.settngs_namespace import SettngsNS as ct_ns
 from comictalker.comictalker import ComicTalker
@@ -90,7 +89,7 @@ def validate_talker_settings(config: settngs.Config[ct_ns], talkers: dict[str, C
             cfg[0][group_for_plugin(talker)] = talker.parse_settings(cfg[0][group_for_plugin(talker)])
         except Exception as e:
             # Remove talker as we failed to apply the settings
-            del comictaggerlib.ctsettings.talkers[talker.id]
+            del talkers[talker.id]
             logger.exception("Failed to initialize talker settings: %s", e)
 
     return cast(settngs.Config[ct_ns], settngs.get_namespace(cfg, file=True, cmdline=True))

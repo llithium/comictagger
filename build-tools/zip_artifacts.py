@@ -21,35 +21,23 @@ def addToZip(zf: zipfile.ZipFile, path: str, zippath: str) -> None:
 
 
 def Zip(zip_file: pathlib.Path, path: pathlib.Path) -> None:
-    zip_file.unlink(missing_ok=True)
     with zipfile.ZipFile(f"{zip_file}.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=8) as zf:
-        zippath = os.path.basename(path)
-        if not zippath:
-            zippath = os.path.basename(os.path.dirname(path))
-        if zippath in ("", os.curdir, os.pardir):
-            zippath = ""
-        addToZip(zf, str(path), zippath)
+        addToZip(zf, str(path), archive_name(path))
 
 
-def addToTar(tf: tarfile.TarFile, path: str, zippath: str) -> None:
-    if os.path.isfile(path):
-        tf.add(path, zippath)
-    elif os.path.isdir(path):
-        if zippath:
-            tf.add(path, zippath, recursive=False)
-        for nm in sorted(os.listdir(path)):
-            addToTar(tf, os.path.join(path, nm), os.path.join(zippath, nm))
+def archive_name(path: pathlib.Path) -> str:
+    name = os.path.basename(path) or os.path.basename(os.path.dirname(path))
+    return "" if name in ("", os.curdir, os.pardir) else name
 
 
 def Tar(tar_file: pathlib.Path, path: pathlib.Path) -> None:
-    tar_file.unlink(missing_ok=True)
     with tarfile.open(f"{tar_file}.tar.gz", "w:gz") as tf:
-        zippath = os.path.basename(path)
-        if not zippath:
-            zippath = os.path.basename(os.path.dirname(path))
-        if zippath in ("", os.curdir, os.pardir):
-            zippath = ""
-        addToTar(tf, str(path), zippath)
+        name = archive_name(path)
+        if name or not path.is_dir():
+            tf.add(path, name)
+        else:
+            for child in sorted(path.iterdir()):
+                tf.add(child, child.name)
 
 
 if __name__ == "__main__":

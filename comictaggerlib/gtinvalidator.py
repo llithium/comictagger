@@ -37,15 +37,8 @@ def is_valid_gtin(gtin: str) -> bool:
     except ValueError:
         return False
 
-    # Using the same algorithm since all GTIN
-    # codes are validated the same way.
-    # Also just checking mathematically and not against a GTIN database
-    control_number = 0
-    for i, digit in enumerate(digits[:-1]):
-        if i % 2 == 0:
-            control_number += digit * 1
-        else:
-            control_number += digit * 3
+    # The rightmost data digit has weight 3, regardless of GTIN length.
+    control_number = sum(digit * (3 if i % 2 == 0 else 1) for i, digit in enumerate(reversed(digits[:-1])))
     control_number = (10 - (control_number % 10)) % 10
 
     return control_number == digits[-1]

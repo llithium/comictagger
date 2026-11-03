@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from importlib.metadata import entry_points
+
 import pytest
-from importlib_metadata import entry_points
 
 import comicapi.genericmetadata
 import testing.comicdata
@@ -14,7 +15,7 @@ for x in entry_points(group="comicapi.tags"):
     tag = x.load()
     supported = tag.enabled
     exe_found = True
-    tags.append(pytest.param(tag, marks=pytest.mark.xfail(not supported, reason="tags not enabled")))
+    tags.append(pytest.param(tag, marks=pytest.mark.skipif(not supported, reason="tags not enabled")))
 
 if not tags:
     raise Exception("No tags found")

@@ -13,6 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+import html
 import logging
 import posixpath
 import re
@@ -41,91 +42,47 @@ def cleanup_html(string: str | None, remove_html_tables: bool = False) -> str:
         return string
     from bs4 import BeautifulSoup
 
-    # find any tables
     soup = BeautifulSoup(string, "html.parser")
-    tables = soup.find_all("table")
-
-    # put in our own
-    string = re.sub(r"<br>|</li>", "\n", string, flags=re.IGNORECASE)
-    string = re.sub(r"<li>", "* ", string, flags=re.IGNORECASE)
-    string = re.sub(r"</p>", "\n\n", string, flags=re.IGNORECASE)
-    string = re.sub(r"<h([1-6])>", lambda m: "#" * int(m.group(1)) + " ", string, flags=re.IGNORECASE)
-    string = re.sub(r"</h[1-6]>", "\n", string, flags=re.IGNORECASE)
-
-    # remove the tables
-    p = re.compile(r"<table[^<]*?>.*?</table>")
-    table_placeholders: list[str] = []
-    if remove_html_tables:
-        string = p.sub("", string)
-        string = string.replace("*List of covers and their creators:*", "")
-    else:
-
-        def replace_table(_match: re.Match[str]) -> str:
-            placeholder = f"\x00COMICTAGGER_TABLE_{len(table_placeholders)}\x00"
-            table_placeholders.append(placeholder)
-            return placeholder
-
-        string = p.sub(replace_table, string)
-
-    # now strip all other tags
-    p = re.compile(r"<[^<]*?>")
-    newstring = p.sub("", string)
-
-    newstring = newstring.replace("&nbsp;", " ")
-    newstring = newstring.replace("&amp;", "&")
-    newstring = newstring.replace("&#039;", "'")
-
-    newstring = newstring.strip()
-
-    if not remove_html_tables:
-        # now rebuild the tables into text from BSoup
+    for table in soup.find_all("table"):
+        # A nested table is included in its outer cell's readable text.
+        if table.find_parent("table") is not None:
+            continue
+        if remove_html_tables:
+            table.decompose()
+            continue
         try:
-            table_strings = []
-            for table in tables:
-                rows = []
-                hdrs = []
-                col_widths = []
-                for hdr in table.find_all("th"):
-                    item = hdr.get_text(" ", strip=True)
-                    hdrs.append(item)
-                    col_widths.append(len(item))
-                rows.append(hdrs)
-
-                for row in table.find_all("tr"):
-                    cols = []
-                    col = row.find_all("td")
-
-                    for i, c in enumerate(col):
-                        item = c.get_text(" ", strip=True)
-                        cols.append(item)
-                        if len(item) > col_widths[i]:
-                            col_widths[i] = len(item)
-
-                    if cols:
-                        rows.append(cols)
-                # now we have the data, make it into text
-                fmtstr = "|"
-                for w in col_widths:
-                    fmtstr += f" {{:{w + 1}}}|"
-                table_text = ""
-
-                for counter, row in enumerate(rows):
-                    table_text += fmtstr.format(*row) + "\n"
-                    if counter == 0 and len(hdrs) != 0:
-                        table_text += "|"
-                        for w in col_widths:
-                            table_text += "-" * (w + 2) + "|"
-                        table_text += "\n"
-
-                table_strings.append(table_text + "\n")
-
-            for placeholder, table_string in zip(table_placeholders, table_strings):
-                newstring = newstring.replace(placeholder, table_string)
+            rows = []
+            header_rows = []
+            for row in table.find_all("tr"):
+                if row.find_parent("table") is not table:
+                    continue
+                cells = row.find_all(["th", "td"], recursive=False)
+                if cells:
+                    rows.append([cell.get_text(" ", strip=True) for cell in cells])
+                    header_rows.append(all(cell.name == "th" for cell in cells))
+            if not rows:
+                table.replace_with(table.get_text(" ", strip=True))
+                continue
+            widths = [max(len(row[i]) if i < len(row) else 0 for row in rows) for i in range(max(map(len, rows)))]
+            lines = []
+            for row, is_header in zip(rows, header_rows):
+                row = row + [""] * (len(widths) - len(row))
+                lines.append("|" + "".join(f" {cell:{width + 1}}|" for cell, width in zip(row, widths)))
+                if is_header:
+                    lines.append("|" + "".join("-" * (width + 2) + "|" for width in widths))
+            table.replace_with("\n".join(lines) + "\n\n")
         except Exception:
-            # we caught an error rebuilding the table.
-            # just bail and remove the formatting
             logger.exception("table parse error")
-            for placeholder in table_placeholders:
-                newstring = newstring.replace(placeholder, "")
+            table.replace_with(table.get_text(" ", strip=True))
 
-    return newstring
+    # Add text markers before stripping the remaining HTML tags.
+    string = str(soup)
+    string = re.sub(r"<br\s*/?>|</li>", "\n", string, flags=re.IGNORECASE)
+    string = re.sub(r"<li(?:\s[^>]*)?>", "* ", string, flags=re.IGNORECASE)
+    string = re.sub(r"</p>", "\n\n", string, flags=re.IGNORECASE)
+    string = re.sub(r"<h([1-6])(?:\s[^>]*)?>", lambda m: "#" * int(m.group(1)) + " ", string, flags=re.IGNORECASE)
+    string = re.sub(r"</h[1-6]>", "\n", string, flags=re.IGNORECASE)
+    if remove_html_tables:
+        string = string.replace("*List of covers and their creators:*", "")
+    string = re.sub(r"<[^<]*?>", "", string)
+    return html.unescape(string).replace("\xa0", " ").strip()

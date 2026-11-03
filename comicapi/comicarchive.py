@@ -52,7 +52,7 @@ def load_archive_plugins(local_plugins: Iterable[type[Archiver]] = tuple()) -> N
     for ep in itertools.chain(entry_points(group="comicapi.archiver")):
         try:
             spec = importlib.util.find_spec(ep.module)
-        except ValueError:
+        except Exception:
             spec = None
         try:
             archiver: type[Archiver] = ep.load()
@@ -86,7 +86,7 @@ def load_tag_plugins(version: str = f"ComicAPI/{version}", local_plugins: Iterab
             _spec = importlib.util.find_spec(ep.module)
             if _spec and _spec.has_location and _spec.origin:
                 location = _spec.origin
-        except ValueError:
+        except Exception:
             location = "Unknown"
 
         try:

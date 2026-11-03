@@ -52,6 +52,10 @@ scope (`comicapi`, `comictaggerlib`, and `comictalker`), followed by the base,
 GUI, 7z, CBR, and all-extra pytest environments. To run only the base tests,
 use `python -m tox -e none`.
 
+The pre-commit lint hook runs the same `tox -e lint` environment as CI, including
+its flake8 plugins and mypy scope. Run pre-commit from the activated environment
+where tox is installed.
+
 ## Packaging
 
 Build packages and application artifacts locally with:

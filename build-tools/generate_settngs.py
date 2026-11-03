@@ -8,18 +8,39 @@ import tempfile
 
 import settngs
 
+import comicapi.comicarchive
 import comictaggerlib.main
+from comicapi.archivers.folder import FolderArchiver
+from comicapi.archivers.rar import RarArchiver
+from comicapi.archivers.sevenzip import SevenZipArchiver
+from comicapi.archivers.zip import ZipArchiver
+from comicapi.tags.comicrack import ComicRack
+from comictaggerlib.ctversion import version
+from comictalker.talkers.comicvine import ComicVineTalker
 
 
 def generate() -> str:
-    app = comictaggerlib.main.App()
-    app.load_plugins(app.initial_arg_parser.parse_known_args()[0])
-    app.register_settings(True)
-    imports, types = settngs.generate_dict(app.manager.definitions)
-    imports2, types2 = settngs.generate_ns(app.manager.definitions)
+    archivers = comicapi.comicarchive.archivers
+    tags = comicapi.comicarchive.tags
+    original_archivers = archivers.copy()
+    original_tags = tags.copy()
+    try:
+        archivers[:] = [ZipArchiver, SevenZipArchiver, RarArchiver, FolderArchiver]
+        tags.clear()
+        tags[ComicRack.id] = ComicRack(version)
+        with tempfile.TemporaryDirectory() as cache:
+            app = comictaggerlib.main.App()
+            talker = ComicVineTalker(version, pathlib.Path(cache))
+            app.talkers = {talker.id: talker}
+            app.register_settings(True)
+            imports, types = settngs.generate_dict(app.manager.definitions)
+            imports2, types2 = settngs.generate_ns(app.manager.definitions)
+    finally:
+        archivers[:] = original_archivers
+        tags.clear()
+        tags.update(original_tags)
     i = imports.splitlines()
-    i.extend(set(imports2.splitlines()) - set(i))
-    os.linesep
+    i.extend(sorted(set(imports2.splitlines()) - set(i)))
     return (os.linesep * 2).join((os.linesep.join(i), types2, types))
 
 

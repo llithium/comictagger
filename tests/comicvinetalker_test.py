@@ -19,8 +19,11 @@ def test_search_for_series(comicvine_api, comic_cache):
         comicvine_api.id,
         "cory doctorows futuristic tales of the here and now",
     )[0][0]
-    series_results = comicvine_api._format_series(json.loads(cache_series.data))
-    assert results == series_results
+    assert json.loads(cache_series.data)["id"] == 23437
+    assert results.id == "23437"
+    assert results.name == "Cory Doctorow's Futuristic Tales of the Here and Now"
+    assert results.count_of_issues == 1
+    assert results.start_year == 2007
 
 
 def test_search_for_series_stops_on_empty_page(comicvine_api, monkeypatch):
@@ -82,23 +85,24 @@ def test_issue_pagination_fails_without_progress(comicvine_api, monkeypatch):
 def test_fetch_series(comicvine_api, comic_cache):
     result = comicvine_api.fetch_series(23437)
     cache_series = comic_cache.get_series_info(23437, comicvine_api.id)[0]
-    series_result = comicvine_api._format_series(json.loads(cache_series.data))
-    assert result == series_result
+    assert result == testing.comicvine.comic_series_result
+    assert json.loads(cache_series.data)["id"] == 23437
+    assert comicvine_api.fetch_series(23437) == result
 
 
 def test_fetch_issues_in_series(comicvine_api, comic_cache):
     results = comicvine_api.fetch_issues_in_series(23437)
     cache_issues = comic_cache.get_series_issues_info(23437, comicvine_api.id)
-    issues_results = [
-        comicvine_api._map_comic_issue_to_metadata(
-            json.loads(x[0].data),
-            comicvine_api._format_series(
-                json.loads(comic_cache.get_series_info(x[0].series_id, comicvine_api.id)[0].data)
-            ),
-        )
-        for x in cache_issues
-    ]
-    assert results == issues_results
+    assert len(results) == 1
+    issue = results[0]
+    assert issue.issue_id == "140529"
+    assert issue.series_id == "23437"
+    assert issue.series == "Cory Doctorow's Futuristic Tales of the Here and Now"
+    assert issue.title == "Anda's Game"
+    assert issue.issue == "1"
+    assert (issue.year, issue.month, issue.day) == (2007, 10, 1)
+    assert json.loads(cache_issues[0][0].data)["id"] == 140529
+    assert comicvine_api.fetch_issues_in_series(23437) == results
 
 
 def test_comic_vine_deck_volume_is_mapped_to_metadata(comicvine_api):

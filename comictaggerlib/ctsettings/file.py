@@ -103,19 +103,19 @@ def filename(parser: settngs.Manager) -> None:
         "--remove-c2c",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Removes c2c from filenames.\nRequires --complicated-parser\ndefault: %(default)s\n\n",
+        help="Removes c2c from filenames.\nRequires --filename-parser complicated\ndefault: %(default)s\n\n",
     )
     parser.add_setting(
         "--remove-fcbd",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Removes FCBD/free comic book day from filenames.\nRequires --complicated-parser\ndefault: %(default)s\n\n",
+        help="Removes FCBD/free comic book day from filenames.\nRequires --filename-parser complicated\ndefault: %(default)s\n\n",
     )
     parser.add_setting(
         "--remove-publisher",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Attempts to remove publisher names from filenames, currently limited to Marvel and DC.\nRequires --complicated-parser\ndefault: %(default)s\n\n",
+        help="Attempts to remove publisher names from filenames, currently limited to Marvel and DC.\nRequires --filename-parser complicated\ndefault: %(default)s\n\n",
     )
     parser.add_setting(
         "--split-words",
@@ -127,13 +127,13 @@ def filename(parser: settngs.Manager) -> None:
         "--protofolius-issue-number-scheme",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Use an issue number scheme devised by protofolius for encoding format information as a letter in front of an issue number.\nImplies --allow-issue-start-with-letter.  Requires --complicated-parser\ndefault: %(default)s\n\n",
+        help="Use an issue number scheme devised by protofolius for encoding format information as a letter in front of an issue number.\nImplies --allow-issue-start-with-letter. Requires --filename-parser complicated\ndefault: %(default)s\n\n",
     )
     parser.add_setting(
         "--allow-issue-start-with-letter",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Allows an issue number to start with a single letter (e.g. '#X01').\nRequires --complicated-parser\ndefault: %(default)s\n\n",
+        help="Allows an issue number to start with a single letter (e.g. '#X01').\nRequires --filename-parser complicated\ndefault: %(default)s\n\n",
     )
 
 
