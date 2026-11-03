@@ -51,13 +51,35 @@ def test_score_and_exact_boundaries(distances, score, exact):
     assert result.exact is exact
 
 
-def test_filters_stop_at_distance_gap(tmp_path):
+def test_filters_reject_candidates_beyond_distance_gap(tmp_path):
     tagger = quick_tag(tmp_path)
     candidates = [hashes("1", 0), hashes("2", 3), hashes("3", 7), hashes("4", 8)]
     assert [r.id.ID for r in tagger._filter_hash_results(candidates)] == ["1", "2"]
     aggressive, normal = tagger._filter_hashes(candidates, True)
     assert [r.id.ID for r in normal] == ["1", "2"]
     assert [r.id.ID for r in aggressive] == ["1", "2"]
+
+
+@pytest.mark.parametrize("aggressive_filtering", [False, True])
+@pytest.mark.parametrize("distances", [((0, 3), (4, 7), (5, 0)), ((0, 3), (1, 9), (2, 0))])
+def test_gap_does_not_discard_later_improved_hash_match(tmp_path, distances, aggressive_filtering):
+    tagger = quick_tag(tmp_path)
+    candidates = [hashes(str(i), *values) for i, values in enumerate(distances, 1)]
+
+    selected, display = tagger.match_results(candidates, aggressive_filtering)
+
+    assert [r.id.ID for r in selected] == ["1", "3"]
+    assert [r.id.ID for r in display] == ["1", "3"]
+
+
+def test_aggressive_filter_can_keep_improved_later_hash_group(tmp_path):
+    tagger = quick_tag(tmp_path)
+    candidates = [hashes("1", 0, 5, 9), hashes("2", 5, 9), hashes("3", 6, 0)]
+
+    selected, display = tagger.match_results(candidates, True)
+
+    assert [r.id.ID for r in selected] == ["1", "3"]
+    assert [r.id.ID for r in display] == ["1", "2", "3"]
 
 
 def test_aggressive_filter_is_stricter_than_normal(tmp_path):

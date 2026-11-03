@@ -436,18 +436,20 @@ class QuickTag:
         previous: dict[HashType, None | int] = dict.fromkeys(HashType)
         ordered = sorted(results, key=lambda r: r.key)
         for hash_group in ordered:
-            b = []
+            distance_gaps = []
             for _hash in hash_group.hashes:
                 prev = previous[_hash["Hash"]["Kind"]]
-                b.append(prev is not None and (_hash["Distance"] - prev) > 3)
+                distance_gaps.append(prev is not None and (_hash["Distance"] - prev) > 3)
+            # Lexicographic hash ordering can place an improved match after a rejected one.
+            if distance_gaps and all(distance_gaps):
+                continue
+            for _hash in hash_group.hashes:
                 previous[_hash["Hash"]["Kind"]] = _hash["Distance"]
-            if b and all(b):
-                break
 
             groups.append(hash_group)
         if len(groups) < len(ordered):
             logger.debug(
-                "Filtering bottom %d of %s results as they seem to all be substantially worse",
+                "Filtering %d of %d results with substantially worse hash distances",
                 len(ordered) - len(groups),
                 len(ordered),
             )
@@ -458,25 +460,18 @@ class QuickTag:
         if not hashes:
             return [], []
 
-        aggressive_skip = False
         hashes = sorted(hashes, key=lambda r: r.key)
 
         groups: list[Hashes] = [hashes[0]]
         aggressive_groups = [hashes[0]]
-        previous = hashes[0]
         for group in hashes[1:]:
-            group_limit = 3
-            if (group.distance - previous.distance) > group_limit:
-                break
-            if aggressive_filtering:
-                if group.should_break(previous):
-                    aggressive_skip = True
+            if (group.distance - groups[-1].distance) > 3:
+                continue
 
-            if not aggressive_skip:
+            if not aggressive_filtering or not group.should_break(aggressive_groups[-1]):
                 aggressive_groups.append(group)
 
             groups.append(group)
-            previous = group
         if len(groups) < len(hashes) or len(groups) > len(aggressive_groups):
             logger.debug(
                 "skipping (%d|%d)/%d results",
