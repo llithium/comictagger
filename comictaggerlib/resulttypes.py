@@ -24,8 +24,6 @@ class IssueResult(NamedTuple):
 
     @property
     def distance(self) -> int:
-        if self.score.score is None:
-            return 100
         return self.score.score
 
 

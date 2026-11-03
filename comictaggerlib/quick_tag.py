@@ -65,11 +65,6 @@ class Result(TypedDict):
     EquivalentIDs: list[ID_dict]
 
 
-class ResultList(NamedTuple):
-    distance: int
-    results: list[Result]
-
-
 class Distance(NamedTuple):
     hash: HashType
     distance: int
@@ -136,7 +131,7 @@ class Hashes:
         # Get the distances as a value between 0 and 1. Lowest value is 55/64 ~ 0.85
         hashes: list[float] = [(64 - x["Distance"]) / 64 for x in self.hashes][: len(self.modifier_scoring)]
         # Set missing values to the lowest possible match so we are comparing an equal number of values
-        hashes.extend((64 - 9) // 64 for _ in range(len(self.modifier_scoring) - len(hashes)))
+        hashes.extend((64 - 9) / 64 for _ in range(len(self.modifier_scoring) - len(hashes)))
 
         mod = self.modifier_scoring[len(self.hashes)]
         # Add an extra mod value to bring the score up if there are more hashes
@@ -144,16 +139,13 @@ class Hashes:
         return int(statistics.mean(int(x * 100) for x in hashes))
 
     @cached_property
-    def kinds(self) -> set[HashType]:
-        return {HashType(x["Hash"]["Kind"]) for x in self.hashes}
-
-    @cached_property
     def distances(self) -> tuple[Distance, ...]:
         return tuple(Distance(HashType(x["Hash"]["Kind"]), x["Distance"]) for x in self.hashes)
 
     @cached_property
     def exact(self) -> bool:
-        return self.score >= 95 and len(self.hashes) > 1
+        # Two perfect hashes are exact even though missing-hash padding scores 94.
+        return len(self.hashes) > 1 and (self.score >= 95 or all(x["Distance"] == 0 for x in self.hashes))
 
     @cached_property
     def key(self) -> tuple[SupportsRichComparison, ...]:
@@ -430,7 +422,8 @@ class QuickTag:
             for md_id in all_ids:
                 md_results.append(self.talker.fetch_comic_data(issue_id=md_id, on_rate_limit=None))
 
-        retrieved_ids = {ID(self.domain, md.issue_id) for md in md_results}  # type: ignore[arg-type]
+        md_results = [md for md in md_results if md.issue_id and md.issue_id in all_ids]
+        retrieved_ids = {ID(self.domain, md.issue_id) for md in md_results if md.issue_id}
         bad_ids = relevant_ids - retrieved_ids
         if bad_ids:
             logger.debug("Adding bad IDs to known list: %s", bad_ids)
@@ -441,24 +434,22 @@ class QuickTag:
     def _filter_hash_results(self, results: Iterable[Hashes]) -> list[Hashes]:
         groups: list[Hashes] = []
         previous: dict[HashType, None | int] = dict.fromkeys(HashType)
-        skipped: list[Hashes] = []
-        for hash_group in sorted(results, key=lambda r: r.key):
+        ordered = sorted(results, key=lambda r: r.key)
+        for hash_group in ordered:
             b = []
-            if skipped:
-                skipped.append(hash_group)
             for _hash in hash_group.hashes:
                 prev = previous[_hash["Hash"]["Kind"]]
                 b.append(prev is not None and (_hash["Distance"] - prev) > 3)
                 previous[_hash["Hash"]["Kind"]] = _hash["Distance"]
             if b and all(b):
-                skipped.append(hash_group)
+                break
 
             groups.append(hash_group)
-        if skipped:
+        if len(groups) < len(ordered):
             logger.debug(
                 "Filtering bottom %d of %s results as they seem to all be substantially worse",
-                len(skipped),
-                len(skipped) + len(groups),
+                len(ordered) - len(groups),
+                len(ordered),
             )
         return groups
 
@@ -468,7 +459,6 @@ class QuickTag:
             return [], []
 
         aggressive_skip = False
-        skipped: list[Hashes] = []
         hashes = sorted(hashes, key=lambda r: r.key)
 
         groups: list[Hashes] = [hashes[0]]
@@ -476,9 +466,9 @@ class QuickTag:
         previous = hashes[0]
         for group in hashes[1:]:
             group_limit = 3
-            if (group.distance - previous.distance) > group_limit or skipped:
-                skipped.append(group)
-            elif aggressive_filtering:
+            if (group.distance - previous.distance) > group_limit:
+                break
+            if aggressive_filtering:
                 if group.should_break(previous):
                     aggressive_skip = True
 
@@ -487,11 +477,17 @@ class QuickTag:
 
             groups.append(group)
             previous = group
-        if skipped or len(groups) - len(aggressive_groups) > 0:
-            logger.debug("skipping (%d|%d)/%d results", len(skipped), len(groups) - len(aggressive_groups), len(hashes))
+        if len(groups) < len(hashes) or len(groups) > len(aggressive_groups):
+            logger.debug(
+                "skipping (%d|%d)/%d results",
+                len(hashes) - len(groups),
+                len(groups) - len(aggressive_groups),
+                len(hashes),
+            )
         return aggressive_groups, groups
 
     def match_results(self, results: list[Hashes], aggressive_filtering: bool) -> tuple[list[Hashes], list[Hashes]]:
+        results = [r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())]
         exact = [r for r in results if r.exact]
 
         limited = limit(results, self.limit)
@@ -532,7 +528,7 @@ class QuickTag:
         # This matching is only useful with a series name or an issue number
         if not (tags.series or tags.issue):
             return None
-        limited = limit((r for r in results if r.id not in KNOWN_BAD_IDS.get(self.domain, set())), self.limit)
+        limited = limit((r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())), self.limit)
 
         ids = {r.id: r for r in itertools.chain.from_iterable(limited)}
 
@@ -560,6 +556,9 @@ class QuickTag:
         interactive: bool,
         aggressive_filtering: bool,
     ) -> ID | None:
+        results = [r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())]
+        if not results:
+            results = [r for r in display_results if r.id not in self.known_bad_ids.get(self.domain, set())]
         if not results:
             return None
         # we only return early if we don't have a series name or issue as get_mds will pull the full info if there is only one result
@@ -573,7 +572,7 @@ class QuickTag:
             self.output("Found a single match < 4. Assuming it's correct")
             return results[0].id
 
-        limited = limit((r for r in results if r.id not in KNOWN_BAD_IDS.get(self.domain, set())), self.limit)
+        limited = limit(results, self.limit)
         ids = {r.id for r in itertools.chain.from_iterable(limited)}
 
         matched_result = None
@@ -583,13 +582,13 @@ class QuickTag:
             matched_result = self.check_matches(results, tags)
         if matched_result is None:
             matched_result = self.check_matches(display_results, tags)
-            if matched_result is not None:
-                return matched_result.id
+        if matched_result is not None:
+            return matched_result.id
         if not interactive:
             return None
 
         limited_interactive = limit(
-            (r for r in display_results if r.id not in KNOWN_BAD_IDS.get(self.domain, set())), self.limit
+            (r for r in display_results if r.id not in self.known_bad_ids.get(self.domain, set())), self.limit
         )
         ids_interactive = {r.id: r for r in itertools.chain.from_iterable(limited_interactive)}
 
@@ -598,6 +597,9 @@ class QuickTag:
         interactive_only_ids = set(ids_interactive).difference(ids)
 
         items = sorted(mds_interactive, key=lambda r: r[0].key)
+        if not items:
+            self.output("No results found for QuickTag")
+            return None
         self.output(
             f"\nSelect result for {ca.path.name}, page count: {ca.get_number_of_pages()} :\n", force_output=True
         )
@@ -622,9 +624,9 @@ class QuickTag:
             )
         while True:
             i = input(
-                f'Please select a result to tag the comic with or "q" to quit: [1-{len(results)}] ',
+                f'Please select a result to tag the comic with or "q" to quit: [1-{len(items)}] ',
             ).casefold()
-            if i.isdigit() and int(i) in range(1, len(results) + 1):
+            if i.isdigit() and int(i) in range(1, len(items) + 1):
                 break
             if i.startswith("q"):
                 self.output("User quit without saving metadata")
