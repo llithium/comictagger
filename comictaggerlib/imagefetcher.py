@@ -47,19 +47,13 @@ logger = logging.getLogger(__name__)
 class ImageFetcherException(Exception): ...
 
 
-def fetch_complete(url: str, image_data: bytes | QtCore.QByteArray) -> None: ...
-
-
 class ImageFetcher:
-    image_fetch_complete: Callable[[str, bytes | QtCore.QByteArray], None] = fetch_complete
+    image_fetch_complete: Callable[[str, bytes | QtCore.QByteArray], None] | None = None
     qt_available = True
 
     def __init__(self, cache_folder: pathlib.Path) -> None:
         self.db_file = cache_folder / "image_url_cache.db"
         self.cache_folder = cache_folder / "image_cache"
-
-        self.user_data = None
-        self.fetched_url = ""
 
         if self.qt_available:
             try:
@@ -90,8 +84,6 @@ class ImageFetcher:
         background, and emit a signal when done
         """
 
-        self.fetched_url = url
-
         # first look in the DB
         image_data = self.get_image_from_cache(url)
         try:
@@ -109,14 +101,16 @@ class ImageFetcher:
         if blocking or not self.qt_available:
             if not image_data:
                 try:
-                    image_data = requests.get(
-                        url, headers={"user-agent": "comictagger image fetcher/" + ctversion.version}
-                    ).content
+                    response = requests.get(
+                        url, headers={"user-agent": "comictagger image fetcher/" + ctversion.version}, timeout=60
+                    )
+                    response.raise_for_status()
+                    image_data = response.content
 
                     i = Image.open(io.BytesIO(image_data))
                     i.verify()
                     # save the image to the cache
-                    self.add_image_to_cache(self.fetched_url, image_data)
+                    self.add_image_to_cache(url, image_data)
                 except PIL.UnidentifiedImageError:
                     logger.error("Unable to identify image from %s", url)
                     image_data = b""
@@ -133,7 +127,8 @@ class ImageFetcher:
 
             # if we found it, just emit the signal asap
             if image_data:
-                self.image_fetch_complete(url, QtCore.QByteArray(image_data))
+                if self.image_fetch_complete is not None:
+                    self.image_fetch_complete(url, QtCore.QByteArray(image_data))
                 return b""
 
             # didn't find it.  look online
@@ -159,7 +154,8 @@ class ImageFetcher:
             i.verify()
             self.add_image_to_cache(url, image_data)
 
-            self.image_fetch_complete(url, image_data)
+            if self.image_fetch_complete is not None:
+                self.image_fetch_complete(url, image_data)
         except PIL.UnidentifiedImageError:
             logger.error("Unable to identify image from %s", url)
         except Exception:

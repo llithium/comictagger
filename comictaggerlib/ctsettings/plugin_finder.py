@@ -5,43 +5,17 @@
 from __future__ import annotations
 
 import importlib.metadata as importlib_metadata
-import importlib.util
 import logging
 import pathlib
-import platform
 import sys
-from collections.abc import Generator, Iterable, Sequence
-from typing import Any, NamedTuple, TypeVar
+from collections.abc import Generator
+from typing import Any, NamedTuple
+
+from comicapi import utils
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_GROUPS = frozenset(("comictagger.talker", "comicapi.archiver", "comicapi.tags"))
-icu_available = importlib.util.find_spec("icu") is not None
-
-
-def _custom_key(tup: Any) -> Any:
-    import natsort
-
-    lst = []
-    for x in natsort.os_sort_keygen()(tup):
-        ret = x
-        if isinstance(x, Sequence) and len(x) > 1 and isinstance(x[1], int) and isinstance(x[0], str) and x[0] == "":
-            ret = ("a", *x[1:])
-
-        lst.append(ret)
-    return tuple(lst)
-
-
-T = TypeVar("T")
-
-
-def os_sorted(lst: Iterable[T]) -> Iterable[T]:
-    import natsort
-
-    key: Any = _custom_key
-    if icu_available or platform.system() == "Windows":
-        key = natsort.os_sort_keygen()
-    return sorted(lst, key=key)
 
 
 class FailedToLoadPlugin(Exception):
@@ -119,7 +93,7 @@ def find_plugins(plugin_folder: pathlib.Path) -> Plugins:
 
     zips = [x for x in plugin_folder.iterdir() if x.is_file() and x.suffix in (".zip", ".whl")]
 
-    for plugin_path in os_sorted(zips):
+    for plugin_path in utils.os_sorted(zips):
         logger.debug("looking for plugins in %s", plugin_path)
         sys_path = sys.path.copy()
         try:
