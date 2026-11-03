@@ -245,11 +245,6 @@ class FileSelectionList(QtWidgets.QWidget):
             QtWidgets.QTableWidgetSelectionRange(0, 0, self.twList.rowCount() - 1, self.twList.columnCount() - 1), True
         )
 
-    def deselect_all(self) -> None:
-        self.twList.setRangeSelected(
-            QtWidgets.QTableWidgetSelectionRange(0, 0, self.twList.rowCount() - 1, self.twList.columnCount() - 1), False
-        )
-
     def remove_deleted(self) -> None:
         deleted = []
         for row in range(self.twList.rowCount()):

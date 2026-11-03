@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 class ExportConflictOpts(Enum):
     DONT_CREATE = auto()
-    OVERWRITE = auto()
     CREATE_UNIQUE = auto()
 
 

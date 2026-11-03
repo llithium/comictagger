@@ -27,7 +27,7 @@ import sys
 import textwrap
 import traceback
 import webbrowser
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import natsort
@@ -70,10 +70,6 @@ from comictaggerlib.versionchecker import VersionChecker
 from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 
 logger = logging.getLogger(__name__)
-
-
-def execute(f: Callable[[], Any]) -> None:
-    f()
 
 
 class QueryThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
@@ -341,14 +337,14 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.fileSelectionList.add_app_action(self.actionRename)
         self.fileSelectionList.add_app_action(self.actionRemoveAuto)
         self.fileSelectionList.add_app_action(self.actionRepackage)
-        self.export_window = ExportWindow(self)
-        self.export_window.export.connect(self._repackage_archive)
         if self.enabled_tags():
             # This should never be false
             self.selected_write_tags = [self.enabled_tags()[0]]
             self.selected_read_tags = [self.enabled_tags()[0]]
 
     def _post_show(self, file_list: list[str]) -> None:
+        self.export_window = ExportWindow(self)
+        self.export_window.export.connect(self._repackage_archive)
         try:
             self.update_tag_tweaks()
         except Exception:
@@ -412,7 +408,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             def set_checked(checked: bool) -> None:
                 self.config[0].Dialog_Flags__notify_plugin_changes = not checked
 
-            self.dlg = OptionalMessageDialog.msg(
+            OptionalMessageDialog.msg(
                 self,
                 "Plugins Have moved!",
                 textwrap.dedent(f"""
@@ -440,8 +436,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.critical(
                 self, "Failed to check for new version", "Failed to check for new version", trace_back
             )
-        self.export_window = ExportWindow(self)
-        self.export_window.export.connect(self._repackage_archive)
 
     def enabled_tags(self) -> Sequence[str]:
         return [tag.id for tag in tags.values() if tag.enabled]
@@ -471,10 +465,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def open_file_event(self, url: QtCore.QUrl) -> None:
         logger.info(url.toLocalFile())
         self.fileSelectionList.add_path_list([url.toLocalFile()])
-
-    def sigint_handler(self, *args: Any) -> None:
-        # defer the actual close in the app loop thread
-        QtCore.QTimer.singleShot(200, lambda: execute(self.close))
 
     def setup_logger(self) -> ApplicationLogWindow:
         try:
@@ -657,7 +647,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             export_name = ca.path.with_suffix(".cbz")
             export = True
 
-            if export_config.conflict == ExportConflictOpts.DONT_CREATE:
+            if export_name.exists() and export_config.conflict == ExportConflictOpts.DONT_CREATE:
                 export = False
                 skipped_list.append(ca.path)
             elif export_config.conflict == ExportConflictOpts.CREATE_UNIQUE:

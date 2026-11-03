@@ -142,20 +142,6 @@ def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> p
     return folder
 
 
-def _isnamedtupleinstance(x: Any) -> bool:  # pragma: no cover
-    t = type(x)
-    b = t.__bases__
-
-    if len(b) != 1 or b[0] != tuple:
-        return False
-
-    f = getattr(t, "_fields", None)
-    if not isinstance(f, tuple):
-        return False
-
-    return all(isinstance(n, str) for n in f)
-
-
 class MetadataFormatter(string.Formatter):
     def __init__(
         self, smart_cleanup: bool = False, platform: str = "auto", replacements: Replacements = DEFAULT_REPLACEMENTS
