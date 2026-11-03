@@ -293,13 +293,12 @@ class App:
             )
             return
 
-        if self.config[0].Commands__command == Action.save_config:
-            if self.config_load_success:
-                settings_path = self.config[0].Runtime_Options__config.user_config_dir / "settings.json"
-                if self.config_load_success:
-                    ctsettings.save_file(self.config, settings_path)
-                print("Settings saved")  # noqa: T201
-                return
+        if self.config[0].Commands__command == Action.save_config and self.config_load_success:
+            settings_path = self.config[0].Runtime_Options__config.user_config_dir / "settings.json"
+            if not ctsettings.save_file(self.config, settings_path):
+                raise SystemExit(1)
+            print("Settings saved")  # noqa: T201
+            return
 
         if not self.config_load_success:
             error = (
@@ -341,6 +340,7 @@ class App:
             raise SystemExit(cli.CLI(self.config[0], self.talkers).run())
         except Exception:
             logger.exception("CLI mode failed")
+            raise SystemExit(1)
 
 
 def main() -> None:

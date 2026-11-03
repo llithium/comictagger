@@ -69,13 +69,11 @@ class CBLTransformer:
             self.metadata.tags.update(x for x in self.metadata.story_arcs)
 
         if self.config.Metadata_Options__copy_notes_to_comments:
-            if self.metadata.notes is not None:
-                if self.metadata.description is None:
-                    self.metadata.description = ""
+            if self.metadata.notes and self.metadata.notes not in (self.metadata.description or ""):
+                if self.metadata.description:
+                    self.metadata.description += "\n\n" + self.metadata.notes
                 else:
-                    self.metadata.description += "\n\n"
-                if self.metadata.notes not in self.metadata.description:
-                    self.metadata.description += self.metadata.notes
+                    self.metadata.description = self.metadata.notes
 
         if self.config.Metadata_Options__copy_weblink_to_comments:
             for web_link in self.metadata.web_links:

@@ -76,3 +76,70 @@ def test_unhandled_archive_action_reports_the_requested_action(config, tmp_comic
 
     assert result.action == Action.gui
     assert result.status == Status.read_failure
+
+
+@pytest.mark.parametrize("dryrun", [False, True])
+def test_rename_reports_selected_collision_destination(config, tmp_comic, monkeypatch, capsys, dryrun):
+    config, _ = config
+    config.File_Rename__template = "{series}"
+    config.File_Rename__auto_extension = True
+    config.Runtime_Options__dryrun = dryrun
+    cli = comictaggerlib.cli.CLI(config, {})
+    monkeypatch.setattr(
+        cli, "create_local_metadata", lambda *args: (comicapi.genericmetadata.GenericMetadata(series="Collision"), [])
+    )
+    (tmp_comic.path.parent / "Collision.cbz").touch()
+    original = tmp_comic.path
+
+    result = cli.rename(tmp_comic)
+
+    assert result.status == Status.success
+    assert result.renamed_path != original
+    assert result.renamed_path.name != "Collision.cbz"
+    assert result.renamed_path.name in capsys.readouterr().out
+    assert result.renamed_path.exists() is (not dryrun)
+    assert original.exists() is dryrun
+
+
+def test_fetched_metadata_is_transformed_once_on_preparation(config):
+    from comictaggerlib.cbltransformer import CBLTransformer
+    from comictaggerlib.md import prepare_metadata
+
+    config, _ = config
+    config.Metadata_Options__apply_transform_on_import = True
+    config.Metadata_Options__copy_notes_to_comments = True
+    talker = Mock()
+    talker.fetch_comic_data.return_value = comicapi.genericmetadata.GenericMetadata(
+        is_empty=False, description="Description", notes="Notes"
+    )
+    cli = comictaggerlib.cli.CLI(config, {config.Sources__source: talker})
+    fetched = cli.fetch_metadata("1")
+    assert fetched.description == "Description"
+    result = prepare_metadata(comicapi.genericmetadata.GenericMetadata(), fetched, config)
+    assert result.description == "Description\n\nNotes"
+    transformed = CBLTransformer(fetched, config).apply()
+    assert CBLTransformer(transformed, config).apply().description == transformed.description
+
+
+def test_interactive_choice_prepares_fetched_metadata_once(config, tmp_comic, monkeypatch):
+    from comicapi.genericmetadata import GenericMetadata
+    from comictaggerlib.resulttypes import IssueResult, Score
+    from testing.comicvine import comic_series_result
+
+    config, _ = config
+    config.Runtime_Options__interactive = True
+    config.Metadata_Options__apply_transform_on_import = True
+    config.Metadata_Options__copy_notes_to_comments = True
+    talker = Mock()
+    talker.fetch_comic_data.return_value = GenericMetadata(is_empty=False, description="Description", notes="Notes")
+    cli = comictaggerlib.cli.CLI(config, {config.Sources__source: talker})
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    monkeypatch.setattr(cli, "create_local_metadata", lambda *args: (GenericMetadata(), []))
+    written = Mock(return_value=True)
+    monkeypatch.setattr(cli, "write_tags", written)
+    match = IssueResult(Score(100, "", 0, "", 0), comic_series_result, GenericMetadata(issue_id="1"))
+    result = Result(Action.save, Status.success, tmp_comic.path, online_results=[match])
+
+    assert cli.display_match_set_for_choice("Choose", result)
+    assert result.md.description == "Description\n\nNotes"
+    assert written.call_args.args[1].description == "Description\n\nNotes"

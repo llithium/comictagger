@@ -146,9 +146,6 @@ class CLI:
             logger.error("No metadata was returned for issue '%s'. Save aborted.", issue_id)
             return None
 
-        if self.config.Metadata_Options__apply_transform_on_import:
-            ct_md = CBLTransformer(ct_md, self.config).apply()
-
         return ct_md
 
     def write_tags(self, ca: ComicArchive, md: GenericMetadata) -> bool:
@@ -665,12 +662,13 @@ class CLI:
             self.output(msg_hdr + "Filename is already good!")
             return Result(Action.rename, Status.success, original_path, full_path, md=md)
 
+        full_path = utils.unique_file(full_path)
         suffix = ""
         if not self.config.Runtime_Options__dryrun:
             # rename the file
             try:
                 ca.rename(
-                    utils.unique_file(full_path),
+                    full_path,
                     remove_empty_source_dir=self.config.File_Rename__kapowarr_naming,
                 )
             except OSError:
@@ -679,8 +677,8 @@ class CLI:
         else:
             suffix = " (dry-run, no change)"
 
-        self.output(f"renamed '{original_path.name}' -> '{new_name}' {suffix}")
-        return Result(Action.rename, Status.success, original_path, tags_read=tags_read, md=md)
+        self.output(f"renamed '{original_path.name}' -> '{full_path.name}' {suffix}")
+        return Result(Action.rename, Status.success, original_path, full_path, tags_read=tags_read, md=md)
 
     def export(self, ca: ComicArchive) -> Result:
         msg_hdr = ""

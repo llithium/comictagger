@@ -107,9 +107,9 @@ def cv_requests_get(monkeypatch, cbz, comic_cache) -> unittest.mock.Mock:
             if args[0].startswith("https://comicvine.gamespot.com/api/volume/4050-23437"):
                 cv_result = copy.deepcopy(comicvine.cv_volume_result)
                 comicvine.filter_field_list(cv_result["results"], kwargs)
-                return comicvine.MockResponse(cv_result)
+                return comicvine.response(cv_result)
             if args[0].startswith("https://comicvine.gamespot.com/api/issue/4000-140529"):
-                return comicvine.MockResponse(comicvine.cv_issue_result)
+                return comicvine.response(comicvine.cv_issue_result)
             flt = kwargs.get("params", {}).get("filter", "").split(",")
             if (
                 args[0].startswith("https://comicvine.gamespot.com/api/issues/")
@@ -121,7 +121,7 @@ def cv_requests_get(monkeypatch, cbz, comic_cache) -> unittest.mock.Mock:
                     cv_list = make_list(comicvine.cv_issue_result)
                     for cv in cv_list["results"]:
                         comicvine.filter_field_list(cv, kwargs)
-                    return comicvine.MockResponse(cv_list)
+                    return comicvine.response(cv_list)
             if (
                 args[0].startswith("https://comicvine.gamespot.com/api/search")
                 and "params" in kwargs
@@ -131,20 +131,20 @@ def cv_requests_get(monkeypatch, cbz, comic_cache) -> unittest.mock.Mock:
                 cv_list = make_list(comicvine.cv_volume_result)
                 for cv in cv_list["results"]:
                     comicvine.filter_field_list(cv, kwargs)
-                return comicvine.MockResponse(cv_list)
+                return comicvine.response(cv_list)
             if (
                 args[0]
                 == "https://comicvine.gamespot.com/a/uploads/scale_large/0/574/585444-109004_20080707014047_large.jpg"
             ):
-                return comicvine.MockResponse({}, cbz.get_page(0))
+                return comicvine.response({}, cbz.get_page(0))
             if (
                 args[0]
                 == "https://comicvine.gamespot.com/a/uploads/scale_avatar/0/574/585444-109004_20080707014047_large.jpg"
             ):
                 thumb = Image.open(io.BytesIO(cbz.get_page(0)))
                 thumb = thumb.resize((105, 160), Image.Resampling.LANCZOS)
-                return comicvine.MockResponse({}, thumb.tobytes("jpeg", "RGB"))
-        return comicvine.MockResponse(comicvine.cv_not_found)
+                return comicvine.response({}, thumb.tobytes("jpeg", "RGB"))
+        return comicvine.response(comicvine.cv_not_found)
 
     m_get = unittest.mock.Mock(side_effect=mock_get)
 

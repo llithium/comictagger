@@ -31,28 +31,6 @@ search_results = [
     ),
 ]
 
-alt_covers = [
-    {"issue_id": 1, "url_list": ["https://test.org/image/1"]},
-    {"issue_id": 2, "url_list": ["https://test.org/image/2"]},
-]
-
-select_details = [
-    {
-        "issue_id": 1,
-        "image_url": "https://test.org/image/1",
-        "thumb_image_url": "https://test.org/thumb/1",
-        "cover_date": "1998",
-        "site_detail_url": "https://test.org/1",
-    },
-    {
-        "issue_id": 2,
-        "image_url": "https://test.org/image/2",
-        "thumb_image_url": "https://test.org/thumb/2",
-        "cover_date": "1998",
-        "site_detail_url": "https://test.org/2",
-    },
-]
-
 # Used to test GenericMetadata.overlay
 metadata = [
     (

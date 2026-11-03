@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 import pathlib
-import platform
 import shutil
+from importlib.metadata import entry_points
 
 import pytest
-from importlib_metadata import entry_points
 
 import comicapi.archivers.rar
 import comicapi.archivers.zip
@@ -15,7 +14,7 @@ import comicapi.genericmetadata
 from testing.filenames import datadir
 
 
-@pytest.mark.xfail(not comicapi.archivers.rar.rar_support, reason="rar support")
+@pytest.mark.skipif(not comicapi.archivers.rar.rar_support, reason="rar support")
 def test_getPageNameList():
     c = comicapi.comicarchive.ComicArchive(pathlib.Path(str(datadir)) / "fake_cbr.cbr")
     assert c.seems_to_be_a_comic_archive()
@@ -55,7 +54,7 @@ def test_write_cr(tmp_comic):
     assert persisted_md.series == "Persisted series"
 
 
-@pytest.mark.xfail(not (comicapi.archivers.rar.rar_support and shutil.which("rar")), reason="rar support")
+@pytest.mark.skipif(not (comicapi.archivers.rar.rar_support and shutil.which("rar")), reason="rar support")
 def test_save_cr_rar(tmp_path, md_saved, md):
     cbr_path = datadir / "fake_cbr.cbr"
     shutil.copy(cbr_path, tmp_path)
@@ -103,7 +102,7 @@ for x in entry_points(group="comicapi.archiver"):
     if archiver.exe != "":
         exe_found = bool(shutil.which(archiver.exe))
     archivers.append(
-        pytest.param(archiver, marks=pytest.mark.xfail(not (supported and exe_found), reason="archiver not enabled"))
+        pytest.param(archiver, marks=pytest.mark.skipif(not (supported and exe_found), reason="archiver not enabled"))
     )
 
 
@@ -155,7 +154,7 @@ def test_rename_keeps_a_nonempty_source_directory(tmp_comic, tmp_path):
     assert source_dir.exists()
 
 
-@pytest.mark.xfail(not comicapi.archivers.rar.rar_support, reason="rar support")
+@pytest.mark.skipif(not comicapi.archivers.rar.rar_support, reason="rar support")
 def test_rename_reopens_cached_rar_archive(tmp_path):
     source = datadir / "fake_cbr.cbr"
     old_path = tmp_path / source.name
@@ -170,18 +169,19 @@ def test_rename_reopens_cached_rar_archive(tmp_path):
     assert archive.archiver.read_file(archive_files[0]) == expected_contents
 
 
-def test_rename_ro_dest(tmp_comic, tmp_path):
+def test_rename_failure_preserves_original(tmp_comic, tmp_path, monkeypatch):
     old_path = tmp_comic.path
-    dest = tmp_path / "tmp"
-    dest.mkdir(mode=0o000)
-    with pytest.raises(OSError):
-        if platform.system() == "Windows":
-            raise OSError("Windows sucks")
-        tmp_comic.rename(dest / "test.cbz")
-    dest.chmod(mode=0o777)
+
+    def fail_move(*args, **kwargs):
+        raise OSError("move failed")
+
+    monkeypatch.setattr(shutil, "move", fail_move)
+    with pytest.raises(OSError, match="move failed"):
+        tmp_comic.rename(tmp_path / "test.cbz")
+
     assert old_path.exists()
-    assert tmp_comic.path.exists()
     assert tmp_comic.path == old_path
+    assert tmp_comic.archiver.path == old_path
 
 
 def test_page_scan_shares_reader_and_releases_it(tmp_comic, monkeypatch):
