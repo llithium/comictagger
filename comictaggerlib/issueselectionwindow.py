@@ -27,7 +27,7 @@ from comicapi.issuestring import IssueString
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
-from comictaggerlib.seriesselectionwindow import SelectionWindow
+from comictaggerlib.selectionwindow import SelectionWindow
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
 from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
@@ -232,7 +232,7 @@ class IssueSelectionWindow(SelectionWindow[GenericMetadata]):
         # TODO: display the hash to the user so they know it will be used for cover matching
         alt_images = [url.URL for url in issue._alternate_images]
         cover = issue._cover_image.URL if issue._cover_image else ""
-        self.cover_widget.set_issue_details(self.issue_id, [cover, *alt_images])
+        self.cover_widget.set_url_list([cover, *alt_images])
         self.set_description(self.teDescription, issue.description or "")
         series_link = ""
         if issue.web_links:

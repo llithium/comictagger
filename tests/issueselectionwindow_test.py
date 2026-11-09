@@ -7,9 +7,9 @@ import pytest
 pytest.importorskip("PyQt6")
 
 from comicapi.genericmetadata import GenericMetadata
-from comictaggerlib import seriesselectionwindow
 from comictaggerlib.issueselectionwindow import IssueSelectionWindow, QueryThread
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
+from comictaggerlib.selectionwindow import qtutils
 from comictalker.comictalker import TalkerNetworkError
 
 
@@ -38,7 +38,7 @@ def test_issue_query_success_emits_issues(qtbot) -> None:
 
 
 def test_issue_query_failure_closes_progress_and_reports_error(config, qtbot, monkeypatch) -> None:
-    monkeypatch.setattr(seriesselectionwindow.qtutils, "new_web_view", lambda _parent: None)
+    monkeypatch.setattr(qtutils, "new_web_view", lambda _parent: None)
     errors: list[tuple[str, str]] = []
     monkeypatch.setattr(
         OptionalMessageDialog,

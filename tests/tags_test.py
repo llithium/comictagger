@@ -14,24 +14,38 @@ tags = []
 for x in entry_points(group="comicapi.tags"):
     tag = x.load()
     supported = tag.enabled
-    exe_found = True
     tags.append(pytest.param(tag, marks=pytest.mark.skipif(not supported, reason="tags not enabled")))
 
 if not tags:
     raise Exception("No tags found")
 
 
+def supported_metadata(metadata, supported_attributes):
+    # Plugin capability names predate the current PageMetadata and URL fields.
+    field_aliases = {
+        "web_link": "web_links",
+        "pages.image_index": "display_index",
+        "pages.size": "byte_size",
+    }
+    result = {}
+    for path in supported_attributes:
+        field, _, member = path.partition(".")
+        if member:
+            result[path] = [getattr(item, field_aliases.get(path, member)) for item in getattr(metadata, field)]
+        elif field not in ("pages", "credits"):
+            result[path] = getattr(metadata, field_aliases.get(path, field))
+    return result
+
+
 @pytest.mark.parametrize("tag_type", tags)
 def test_metadata(mock_version, tmp_comic, md_saved, tag_type, md):
     tag = tag_type(mock_version[0])
-    supported_attributes = tag.supported_attributes
-    tag.write_tags(md, tmp_comic.archiver)
-    written_metadata = tag.read_tags(tmp_comic.archiver)
-    new_md = md_saved._get_clean_metadata(*supported_attributes)
 
-    # Hack back in the pages variable because CoMet supports identifying the cover by the filename
+    assert tag.write_tags(md, tmp_comic.archiver)
+    written_metadata = tag.read_tags(tmp_comic.archiver)
     if tag.id == "comet":
-        new_md.pages = [
+        # CoMet stores just the cover filename.
+        md_saved.pages = [
             comicapi.genericmetadata.PageMetadata(
                 archive_index=0,
                 bookmark="",
@@ -40,13 +54,26 @@ def test_metadata(mock_version, tmp_comic, md_saved, tag_type, md):
                 type=comicapi.genericmetadata.PageType.FrontCover,
             )
         ]
-        written_metadata = written_metadata._get_clean_metadata(*supported_attributes).replace(
-            pages=written_metadata.pages
-        )
-    else:
-        written_metadata = written_metadata._get_clean_metadata(*supported_attributes)
 
-    assert written_metadata == new_md
+    assert supported_metadata(written_metadata, tag.supported_attributes) == supported_metadata(
+        md_saved, tag.supported_attributes
+    )
+
+
+def test_comicrack_preserves_unknown_xml_and_supports_credit_aliases(mock_version, tmp_comic):
+    tag = ComicRack(mock_version[0])
+    archive = tmp_comic.archiver
+    original = '<?xml version="1.0" encoding="iso-8859-1"?><ComicInfo><Custom>café</Custom></ComicInfo>'
+    assert archive.write_file("ComicInfo.xml", original.encode("iso-8859-1"))
+    assert "<Custom>café</Custom>" in tag.read_raw_tags(archive)
+
+    metadata = comicapi.genericmetadata.GenericMetadata()
+    metadata.add_credit("Example Artist", "artist")
+    assert tag.supports_credit_role("ARTIST")
+    assert tag.write_tags(metadata, archive)
+
+    assert "<Custom>café</Custom>" in tag.read_raw_tags(archive)
+    assert {credit.role for credit in tag.read_tags(archive).credits} == {"Penciller", "Inker"}
 
 
 def test_comicrack_persists_series_start_year(mock_version, tmp_comic):

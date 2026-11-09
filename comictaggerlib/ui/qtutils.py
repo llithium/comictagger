@@ -88,6 +88,20 @@ try:
 
         def new_web_view(parent: QWidget) -> QWebEngineView: ...
 
+    def add_dialog_shortcuts(dialog: QtWidgets.QDialog) -> None:
+        parent = dialog.parentWidget()
+        while parent is not None:
+            quit_action = parent.findChild(QtGui.QAction, "actionExit", Qt.FindChildOption.FindDirectChildrenOnly)
+            if quit_action is not None:
+                dialog.addAction(quit_action)
+                break
+            parent = parent.parentWidget()
+
+        cancel = QtGui.QAction(dialog)
+        cancel.triggered.connect(dialog.reject)
+        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
+        dialog.addAction(cancel)
+
     def center_window_on_parent(window: QtWidgets.QWidget) -> None:
         top_level = window
         while top_level.parent() is not None:

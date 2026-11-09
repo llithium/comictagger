@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import errno
+import os
 import pathlib
-from collections.abc import Callable, Collection
-from contextlib import AbstractContextManager, nullcontext
+import shutil
+import tempfile
+from collections.abc import Callable, Collection, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Protocol, runtime_checkable
 
 
@@ -166,3 +170,36 @@ def read_archive(archive: Archiver) -> AbstractContextManager[Callable[[str], by
     if isinstance(archive, ReadSessionArchiver):
         return archive.read_session()
     return nullcontext(archive.read_file)
+
+
+def member_destination(root: pathlib.Path, name: str) -> pathlib.Path:
+    root = root.resolve()
+    destination = (root / name).resolve()
+    if destination == root or not destination.is_relative_to(root):
+        raise ValueError(f"Archive member escapes destination: {name!r}")
+    return destination
+
+
+@contextmanager
+def archive_replacement(path: pathlib.Path, *, overwrite: bool = True) -> Iterator[pathlib.Path]:
+    """Publish a closed, complete archive when the writer finishes successfully."""
+    with tempfile.TemporaryDirectory(dir=path.parent) as directory:
+        staged = pathlib.Path(directory) / path.name
+        yield staged
+        if overwrite:
+            staged.replace(path)
+        else:
+            try:
+                os.link(staged, path)
+            except OSError as exc:
+                if exc.errno not in (errno.EOPNOTSUPP, errno.ENOTSUP, errno.EPERM, errno.ENOSYS):
+                    raise
+                # Filesystems such as exFAT do not support hard links.
+                with staged.open("rb") as source, path.open("xb") as destination:
+                    try:
+                        shutil.copyfileobj(source, destination)
+                        destination.flush()
+                    except OSError:
+                        destination.close()
+                        path.unlink(missing_ok=True)
+                        raise

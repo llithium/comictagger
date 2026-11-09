@@ -55,7 +55,7 @@ from comictaggerlib.fileselectionlist import FileSelectionList
 from comictaggerlib.graphics import graphics_path
 from comictaggerlib.gtinvalidator import is_valid_gtin
 from comictaggerlib.logwindow import LogWindow
-from comictaggerlib.md import prepare_metadata, read_selected_tags
+from comictaggerlib.md import parse_archive_filename, prepare_metadata, read_configured_tags, write_selected_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.pagebrowser import PageBrowserWindow
 from comictaggerlib.pagelisteditor import PageListEditor
@@ -477,7 +477,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             QTextEditLogger(logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s"), logging.DEBUG),
             parent=self,
         )
-        qapplogwindow.addAction(self.actionExit)
         qapplogwindow.textEdit.append(current_logs.strip())
         root_logger.addHandler(qapplogwindow.log_handler)
         return qapplogwindow
@@ -655,19 +654,21 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
             if export:
                 logger.debug("Exporting %s to %s", ca.path, export_name)
-                if ca.export_as_zip(export_name):
+                if ca.export_as_zip(export_name, overwrite=False):
                     success_count += 1
                     if export_config.add_to_list:
                         new_archives_to_add.append(str(export_name))
                     if export_config.delete_original:
-                        archives_to_remove.append(ca)
-                        ca.path.unlink(missing_ok=True)
+                        try:
+                            ca.path.unlink(missing_ok=True)
+                        except OSError:
+                            logger.exception("Error deleting original archive after export: %s", ca.path)
+                            failed_list.append(ca.path)
+                        else:
+                            archives_to_remove.append(ca)
 
                 else:
-                    # last export failed, so remove the zip, if it exists
                     failed_list.append(ca.path)
-                    if export_name.exists():
-                        export_name.unlink(missing_ok=True)
 
         if prog_dialog is not None:
             prog_dialog.hide()
@@ -891,10 +892,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def metadata_to_form(self) -> None:
         def assign_text(field: QtWidgets.QLineEdit | QtWidgets.QTextEdit, value: Any) -> None:
             if value is not None:
-                if isinstance(field, QtWidgets.QTextEdit) and False:
-                    field.setPlainText(str(value))
-                else:
-                    field.setText(str(value))
+                field.setText(str(value))
 
         md = self.metadata
 
@@ -1027,10 +1025,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
         return -1
 
     def form_to_metadata(self) -> None:
-        # copy the data from the form into the metadata
-        md = GenericMetadata()
+        md = self.metadata.copy()
         md.is_empty = False
 
+        md.original_hash = None
         if utils.xlate(self.cbHashName.currentText()) and utils.xlate(self.leOriginalHash.text()):
             md.original_hash = FileHash(
                 utils.xlate(self.cbHashName.currentText()) or "", utils.xlate(self.leOriginalHash.text()) or ""
@@ -1096,15 +1094,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         md.pages = self.page_list_editor.get_page_list()
 
-        # Preserve hidden md values
-        md.data_origin = self.metadata.data_origin
-        md.issue_id = self.metadata.issue_id
-        md.series_id = self.metadata.series_id
-
-        md.price = self.metadata.price
-        md.identifier = self.metadata.identifier
-        md.rights = self.metadata.rights
-
         self.metadata = md
 
     def use_filename(self) -> None:
@@ -1114,15 +1103,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if self.comic_archive is not None:
             # copy the form onto metadata object
             self.form_to_metadata()
-            new_metadata = self.comic_archive.metadata_from_filename(
-                self.config[0].Filename_Parsing__filename_parser,
-                self.config[0].Filename_Parsing__remove_c2c,
-                self.config[0].Filename_Parsing__remove_fcbd,
-                self.config[0].Filename_Parsing__remove_publisher,
-                split_words,
-                self.config[0].Filename_Parsing__allow_issue_start_with_letter,
-                self.config[0].Filename_Parsing__protofolius_issue_number_scheme,
-            )
+            new_metadata = parse_archive_filename(self.comic_archive, self.config[0], split_words=split_words)
             self.metadata.overlay(new_metadata, mode=comicapi.merge.Mode.OVERLAY, merge_lists=False)
             self.metadata_to_form()
 
@@ -1313,33 +1294,29 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def write_tags(self) -> None:
         QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
-        self.form_to_metadata()
-        assert self.comic_archive
-        failed_tag: str = ""
-        # Save each tag
-        for tag_id in self.config[0].Runtime_Options__tags_write:
-            success = self.comic_archive.write_tags(self.metadata, tag_id)
-            if not success:
-                failed_tag = tags[tag_id].name()
-                break
-
-        self.comic_archive.load_cache(set(tags))
-        QtWidgets.QApplication.restoreOverrideCursor()
+        try:
+            self.form_to_metadata()
+            assert self.comic_archive
+            _, failed_tag = write_selected_tags(
+                self.comic_archive, self.metadata, self.config[0].Runtime_Options__tags_write
+            )
+            self.comic_archive.load_cache(set(tags))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
         if failed_tag:
             OptionalMessageDialog.warning(
                 self,
                 "Save failed",
-                f"The tag save operation seemed to fail for: {failed_tag}",
+                f"The tag save operation seemed to fail for: {tags[failed_tag].name()}",
             )
         else:
             self.clear_dirty_flag()
             self.update_info_box()
             self.update_menus()
 
-            # Only try to read if write was successful
-            self.metadata, _, error = self.read_selected_tags(
-                self.config[0].Runtime_Options__tags_read, self.comic_archive
+            self.metadata, _, error = read_configured_tags(
+                self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
             )
             if error is not None:
                 logger.error("Failed to load metadata for %s: %s", self.comic_archive.path, error)
@@ -1554,13 +1531,22 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Web Link", "Web Link is invalid.")
 
     def show_settings(self) -> None:
-        self.settingswin = SettingsWindow(self, self.config, self.talkers)
+        self.settingswin = SettingsWindow(self, self.config, self.talkers, rename_example=self.rename_example)
         self.settingswin.finished.connect(self.adjust_source_combo)
         self.settingswin.accepted.connect(self.settings_accept)
         self.settingswin.show()
 
     def settings_accept(self) -> None:
         self.config = self.settingswin.config
+        if self.settingswin.tag_names_changed:
+            self.populate_tag_names()
+            self.adjust_tags_combo()
+
+    def rename_example(self) -> tuple[GenericMetadata, str] | None:
+        if self.comic_archive is None:
+            return None
+        self.form_to_metadata()
+        return self.metadata.copy(), self.comic_archive.path.name
 
     def set_app_position(self) -> None:
         if self.config[0].internal__window_width != 0:
@@ -1599,10 +1585,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_tag_tweaks()
 
     def populate_tag_names(self) -> None:
-        # First clear all entries (called from settingswindow.py)
         self.cbSelectedWriteTags.clear()
         self.cbSelectedReadTags.clear()
-        # Add the entries to the tag comboboxes
         for tag in tags.values():
             if not tag.enabled:
                 continue
@@ -1804,15 +1788,15 @@ class TaggerWindow(QtWidgets.QMainWindow):
         src_count = 0
 
         src_tag_ids: list[str] = self.config[0].Runtime_Options__tags_read
-        dest_tag_ids: list[str] = self.config[0].Runtime_Options__tags_write
-
-        if len(src_tag_ids) == 1 and src_tag_ids[0] in dest_tag_ids:
-            # Remove the read tag from the write tag
-            dest_tag_ids.remove(src_tag_ids[0])
+        dest_tag_ids = [
+            tag_id
+            for tag_id in self.config[0].Runtime_Options__tags_write
+            if len(src_tag_ids) != 1 or tag_id != src_tag_ids[0]
+        ]
 
         if not dest_tag_ids:
             OptionalMessageDialog.information(
-                self, "Copy Tags", "Can't copy tag tag onto itself.  Read tag and modify tag must be different."
+                self, "Copy Tags", "Can't copy a tag onto itself. Read and write tags must be different."
             )
             return
 
@@ -1820,7 +1804,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             for tag_id in src_tag_ids:
                 if ca.has_tags(tag_id):
                     src_count += 1
-                    continue
+                    break
 
         if src_count == 0:
             OptionalMessageDialog.information(
@@ -1830,7 +1814,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
             return
 
-        if src_count != 0 and not self.dirty_flag_verification(
+        if not self.dirty_flag_verification(
             "Copy Tags", "If you copy tags now, unsaved data in the form may be lost.  Are you sure?"
         ):
             return
@@ -1848,11 +1832,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
             details,
             icon=OptionalMessageDialog.Icon.Question,
             check_text=None,
-        ).accepted.connect(functools.partial(self.copy_tags, src_tag_ids, dest_tag_ids, src_count))
+        ).accepted.connect(functools.partial(self.copy_tags, src_tag_ids, dest_tag_ids, ca_list))
 
-    def copy_tags(self, src_tag_ids: list[str], dest_tag_ids: list[str], src_count: int) -> None:
-        ca_list = self.fileSelectionList.get_selected_archive_list()
-        prog_dialog = QtWidgets.QProgressDialog("", "Cancel", 0, src_count, self)
+    def copy_tags(self, src_tag_ids: list[str], dest_tag_ids: list[str], ca_list: list[ComicArchive]) -> None:
+        prog_dialog = QtWidgets.QProgressDialog("", "Cancel", 0, len(ca_list), self)
         prog_dialog.setWindowTitle("Copying Tags")
         prog_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         prog_dialog.setMinimumDuration(1000)
@@ -1864,8 +1847,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         for prog_idx, ca in enumerate(ca_list, 1):
             if prog_idx % 10 == 0:
                 QtCore.QCoreApplication.processEvents()
+            if prog_dialog.wasCanceled():
+                break
+            prog_dialog.setValue(prog_idx)
+            prog_dialog.setLabelText(str(ca.path))
             ca_saved = False
-            md, _, error = self.read_selected_tags(src_tag_ids, ca)
+            ca_failed = False
+            md, _, error = read_configured_tags(ca, src_tag_ids, self.config[0])
             if error is not None:
                 failed_list.append(ca.path)
                 continue
@@ -1873,23 +1861,22 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 continue
 
             for tag_id in dest_tag_ids:
-                if ca.has_tags(tag_id):
-                    if prog_dialog.wasCanceled():
-                        break
-
-                    prog_dialog.setValue(prog_idx)
-                    prog_dialog.setLabelText(str(ca.path))
-                    center_window_on_parent(prog_dialog)
-
+                if prog_dialog.wasCanceled():
+                    break
                 if tag_id == "cbi" and self.config[0].Metadata_Options__apply_transform_on_bulk_operation:
-                    md = CBLTransformer(md, self.config[0]).apply()
+                    tag_metadata = CBLTransformer(md, self.config[0]).apply()
+                else:
+                    tag_metadata = md
 
-                if ca.write_tags(md, tag_id):
+                if ca.write_tags(tag_metadata, tag_id):
                     if not ca_saved:
                         success_count += 1
                         ca_saved = True
                 else:
-                    failed_list.append(ca.path)
+                    ca_failed = True
+
+            if ca_failed:
+                failed_list.append(ca.path)
 
             ca.reset_cache()
             ca.load_cache({*self.config[0].Runtime_Options__tags_read, *self.config[0].Runtime_Options__tags_write})
@@ -1944,15 +1931,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         atstartdlg.open()
 
     def _start_auto_tag(self, auto_tag: AutoTagSettings) -> None:
-        # persist some settings because it's probably going to be used next time
-        self.config[0].Auto_Tag__save_on_low_confidence = auto_tag.settings["save_on_low_confidence"]
-        self.config[0].Auto_Tag__use_year_when_identifying = auto_tag.settings["use_year_when_identifying"]
-        self.config[0].Auto_Tag__assume_issue_one = auto_tag.settings["assume_issue_one"]
-        self.config[0].Auto_Tag__ignore_leading_numbers_in_filename = auto_tag.settings[
-            "ignore_leading_numbers_in_filename"
-        ]
-        self.config[0].Auto_Tag__clear_tags = auto_tag.settings["clear_tags"]
-        self.config[0].internal__remove_archive_after_successful_match = auto_tag.remove_after_success
+        auto_tag.save_preferences(self.config[0])
 
         ca_list = self.fileSelectionList.get_selected_archive_list()
         self.fileSelectionList.clear_auto_tag_results(ca_list)
@@ -1964,7 +1943,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         temp_config = auto_tag.new_settings(self.config[0])
         self.autotagthread = AutoTagThread(auto_tag.search_string, ca_list, temp_config, self.current_talker())
 
-        self.autotagthread.autoTagComplete.connect(functools.partial(self.auto_tag_finished, config=temp_config))
+        self.autotagthread.autoTagComplete.connect(
+            functools.partial(self.auto_tag_finished, config=temp_config, archives=ca_list)
+        )
         self.autotagthread.autoTagLogMsg.connect(self.auto_tag_log)
         self.autotagthread.autoTagProgress.connect(self.atprogdialog.on_progress)
         self.autotagthread.ratelimit.connect(self.ratelimit)
@@ -1978,7 +1959,12 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.atprogdialog.open()
 
     def auto_tag_finished(
-        self, match_results: OnlineMatchResults, archives_to_remove: list[ComicArchive], *, config: ct_ns
+        self,
+        match_results: OnlineMatchResults,
+        archives_to_remove: list[ComicArchive],
+        *,
+        config: ct_ns,
+        archives: list[ComicArchive],
     ) -> None:
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
         if self.atprogdialog:
@@ -2004,6 +1990,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             summary += f"Archives that failed due to data fetch errors: {len(match_results.fetch_data_failures)}<br/>"
         if match_results.write_failures:
             summary += f"Archives that failed due to file writing errors: {len(match_results.write_failures)}<br/>"
+        if match_results.read_failures:
+            summary += f"Archives that failed due to tag reading errors: {len(match_results.read_failures)}<br/>"
 
         self.auto_tag_log(summary)
 
@@ -2029,15 +2017,18 @@ class TaggerWindow(QtWidgets.QMainWindow):
             title,
             summary,
             check_text=None,
-        ).accepted.connect(functools.partial(self.open_auto_tag_match_window, match_results, config=config))
-        # TODO: Validate that open_auto_tag_match_window still works
+        ).accepted.connect(
+            functools.partial(self.open_auto_tag_match_window, match_results, config=config, archives=archives)
+        )
 
-    def open_auto_tag_match_window(self, match_results: OnlineMatchResults, *, config: ct_ns) -> None:
-        match_results.multiple_matches.extend(match_results.low_confidence_matches)
-        auto_tagged_archives = {a.path: a for a in self.fileSelectionList.get_selected_archive_list()}
+    def open_auto_tag_match_window(
+        self, match_results: OnlineMatchResults, *, config: ct_ns, archives: list[ComicArchive]
+    ) -> None:
+        candidates = [*match_results.multiple_matches, *match_results.low_confidence_matches]
+        auto_tagged_archives = {a.path: a for a in archives}
         matchdlg = AutoTagMatchWindow(
             self,
-            [(m, auto_tagged_archives[m.original_path]) for m in match_results.multiple_matches],
+            [(m, auto_tagged_archives[m.original_path]) for m in candidates],
             config,
             self.current_talker(),
         )
@@ -2094,7 +2085,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             ) = self.fileSelectionList.get_sorting()
             self.config[0].internal__write_tags = self.config[0].Runtime_Options__tags_write
             self.config[0].internal__read_tags = self.config[0].Runtime_Options__tags_read
-            ctsettings.save_file(self.config, self.config[0].Runtime_Options__config.user_config_dir / "settings.json")
+            ctsettings.save_file(self.config, self.config[0].Runtime_Options__config.settings_file)
 
             event.accept()
         else:
@@ -2167,15 +2158,22 @@ class TaggerWindow(QtWidgets.QMainWindow):
             "File Rename", "If you rename files now, unsaved data in the form will be lost.  Are you sure?"
         ):
             self.rename_window = RenameWindow(
-                self, ca_list, self.config[0].Runtime_Options__tags_read, self.config, self.talkers
+                self,
+                ca_list,
+                self.config[0].Runtime_Options__tags_read,
+                self.config,
+                self.talkers,
+                rename_example=self.rename_example,
             )
             self.rename_window.finished.connect(self._reload_page)
             self.rename_window.finished.connect(self._rename_finished)
             self.rename_window.open()
 
     def _rename_finished(self) -> None:
-        # We may have edited the config during renaming
         self.config = self.rename_window.config
+        if self.rename_window.tag_names_changed:
+            self.populate_tag_names()
+            self.adjust_tags_combo()
 
     def load_archive(self, comic_archive: ComicArchive) -> None:
         self.comic_archive = None
@@ -2190,7 +2188,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.config[0].internal__last_opened_folder = os.path.abspath(os.path.split(comic_archive.path)[0])
         self.comic_archive = comic_archive
 
-        self.metadata, _, error = self.read_selected_tags(self.config[0].Runtime_Options__tags_read, self.comic_archive)
+        self.metadata, _, error = read_configured_tags(
+            self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
+        )
         if error is not None:
             logger.error("Failed to load tags from %s: %s", self.comic_archive.path, error, exc_info=error)
             trace = "\n".join(traceback.format_exception(type(error), error, error.__traceback__))
@@ -2202,13 +2202,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
 
         self.update_ui_for_archive()
-
-    def read_selected_tags(
-        self, tag_ids: list[str], ca: ComicArchive
-    ) -> tuple[GenericMetadata, list[str], Exception | None]:
-        return read_selected_tags(
-            tag_ids, ca, self.config[0].Metadata_Options__tag_merge, self.config[0].Metadata_Options__tag_merge_lists
-        )
 
     def file_list_cleared(self) -> None:
         self.reset_app()

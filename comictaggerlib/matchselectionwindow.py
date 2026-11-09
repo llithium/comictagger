@@ -154,8 +154,7 @@ class MatchSelectionWindow(QtWidgets.QDialog):
         assert match.md._cover_image is not None
         assert match.md._alternate_images is not None
         assert match.md.issue_id
-        self.altCoverWidget.set_issue_details(
-            match.md.issue_id,
+        self.altCoverWidget.set_url_list(
             [x.URL for x in [match.md._cover_image, *match.md._alternate_images] if x],
         )
         if match.md.description is None:

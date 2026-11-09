@@ -26,6 +26,7 @@ import sys
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import Enum, auto
+from functools import cache
 from shutil import which  # noqa: F401
 from typing import Any, TypeVar, cast
 
@@ -198,6 +199,18 @@ def os_sorted(lst: Iterable[T]) -> list[T]:
 KNOWN_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"}
 
 
+@cache
+def _pillow_image_extensions() -> frozenset[str]:
+    try:
+        from PIL import Image
+
+        Image.init()
+        return frozenset(ext for ext, format_name in Image.EXTENSION.items() if format_name in Image.OPEN)
+    except Exception:
+        logger.exception("Failed to load Pillow image formats")
+        return frozenset()
+
+
 def parse_filename(
     filename: str,
     parser: Parser = Parser.ORIGINAL,
@@ -207,6 +220,8 @@ def parse_filename(
     split_words: bool = False,
     allow_issue_start_with_letter: bool = False,
     protofolius_issue_number_scheme: bool = False,
+    *,
+    publisher_names: Iterable[str] = (),
 ) -> filenameparser.FilenameInfo:
     fni = filenameparser.FilenameInfo(
         alternate="",
@@ -234,7 +249,7 @@ def parse_filename(
         filename = " ".join(wordninja.split(filename)) + ext
 
     if parser == Parser.COMPLICATED:
-        lex = filenamelexer.Lex(filename, allow_issue_start_with_letter)
+        lex = filenamelexer.Lex(filename, allow_issue_start_with_letter, publisher_names)
         p = filenameparser.Parse(
             lex.items,
             remove_c2c=remove_c2c,
@@ -357,15 +372,12 @@ def path_to_short_str(original_path: pathlib.Path, renamed_path: pathlib.Path | 
 
 
 def get_page_name_list(files: list[str]) -> list[str]:
-    # get the list file names in the archive, and sort
-    files = cast(list[str], os_sorted(files))
-
-    # make a sub-list of image files
-    page_list = []
-    for name in files:
-        if os.path.splitext(name)[1].casefold() in KNOWN_IMAGE_EXTENSIONS and os.path.basename(name)[0] != ".":
-            page_list.append(name)
-    return page_list
+    extensions = KNOWN_IMAGE_EXTENSIONS | _pillow_image_extensions()
+    return os_sorted(
+        name
+        for name in files
+        if os.path.splitext(name)[1].casefold() in extensions and not os.path.basename(name).startswith(".")
+    )
 
 
 def get_recursive_filelist(pathlist: list[str]) -> list[str]:

@@ -9,14 +9,39 @@ import comicapi.merge
 import testing.comicdata
 
 
-def test_apply_default_page_list(tmp_path, md):
-    new_md = comicapi.genericmetadata.GenericMetadata()
-    new_md.overlay(comicapi.genericmetadata.md_test)
-    new_md.pages = []
-    new_md.apply_default_page_list(["testing"])
+def test_apply_default_page_list_creates_pages_and_marks_the_cover():
+    metadata = comicapi.genericmetadata.GenericMetadata()
 
-    assert new_md.pages[0].display_index == 0
-    assert new_md.pages[0].archive_index == 0
+    metadata.apply_default_page_list(["cover.jpg", "page.jpg"])
+
+    assert [page.filename for page in metadata.pages] == ["cover.jpg", "page.jpg"]
+    assert metadata.get_cover_page_index_list() == [0]
+    assert metadata.get_archive_page_index(1) == 1
+
+
+def test_default_cover_uses_first_displayed_page_with_sparse_indexes():
+    page = comicapi.genericmetadata.PageMetadata("page.jpg", "", "", display_index=0, archive_index=7)
+    metadata = comicapi.genericmetadata.GenericMetadata(pages=[page])
+
+    metadata.apply_default_page_list([])
+
+    assert metadata.get_cover_page_index_list() == [7]
+    assert metadata.pages[0].type == comicapi.genericmetadata.PageType.FrontCover
+
+
+def test_overlay_can_clear_pages_and_preserves_independent_metadata():
+    page = comicapi.genericmetadata.PageMetadata("page.jpg", "", "", display_index=0, archive_index=0)
+    original = comicapi.genericmetadata.GenericMetadata(pages=[page], tags={"source"})
+    edited = comicapi.genericmetadata.GenericMetadata()
+
+    edited.overlay(original)
+    edited.tags.add("edited")
+    edited.pages[0].filename = "edited.jpg"
+    assert original.tags == {"source"}
+    assert original.pages[0].filename == "page.jpg"
+
+    edited.overlay(comicapi.genericmetadata.GenericMetadata(pages=comicapi.genericmetadata.REMOVE))
+    assert edited.pages == []
 
 
 @pytest.mark.parametrize("md, new, expected", testing.comicdata.metadata)

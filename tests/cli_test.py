@@ -6,7 +6,9 @@ import pytest
 
 import comicapi.genericmetadata
 import comictaggerlib.cli
-from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Status
+from comictaggerlib.issueidentifier import IssueIdentifier
+from comictaggerlib.issueidentifier import Result as IdentificationResult
+from comictaggerlib.resulttypes import Action, MatchStatus, Result, Status
 
 
 def test_export_reports_failed_archive_conversion(config, tmp_path):
@@ -32,14 +34,15 @@ def test_online_tag_assume_issue_one_forwards_query_metadata(config, cbz, monkey
     local_md = comicapi.genericmetadata.GenericMetadata(series="Example")
     captured: list[comicapi.genericmetadata.GenericMetadata] = []
 
-    def identify(*args, **kwargs):
-        captured.append(args[1])
-        return Result(Action.save, Status.success, cbz.path), args[3]
+    def identify(self, archive, metadata):
+        captured.append(metadata)
+        return IdentificationResult.no_matches, []
 
-    monkeypatch.setattr(comictaggerlib.cli, "identify_comic", identify)
+    monkeypatch.setattr(IssueIdentifier, "identify", identify)
 
-    cli.online_tag(cbz, local_md, [], OnlineMatchResults())
+    result = cli.online_tag(cbz, local_md, [])
 
+    assert result.match_status == MatchStatus.no_match
     assert local_md.issue is None
     assert captured[0].issue == "1"
 
@@ -61,7 +64,7 @@ def test_direct_issue_fetch_failure_does_not_write_existing_metadata(config, tmp
     write_tags = Mock(return_value=True)
     monkeypatch.setattr(cli, "write_tags", write_tags)
 
-    result, _ = cli.save(tmp_comic, OnlineMatchResults())
+    result = cli.save(tmp_comic)
 
     assert result.status == Status.fetch_data_failure
     assert not write_tags.called
@@ -72,7 +75,7 @@ def test_unhandled_archive_action_reports_the_requested_action(config, tmp_comic
     config, _ = config
     cli = comictaggerlib.cli.CLI(config, {})
 
-    result, _ = cli.process_file_cli(Action.gui, str(tmp_comic.path), OnlineMatchResults())
+    result = cli.process_file_cli(Action.gui, str(tmp_comic.path))
 
     assert result.action == Action.gui
     assert result.status == Status.read_failure
@@ -135,7 +138,7 @@ def test_interactive_choice_prepares_fetched_metadata_once(config, tmp_comic, mo
     cli = comictaggerlib.cli.CLI(config, {config.Sources__source: talker})
     monkeypatch.setattr("builtins.input", lambda _: "1")
     monkeypatch.setattr(cli, "create_local_metadata", lambda *args: (GenericMetadata(), []))
-    written = Mock(return_value=True)
+    written = Mock(return_value=(["cr"], None))
     monkeypatch.setattr(cli, "write_tags", written)
     match = IssueResult(Score(100, "", 0, "", 0), comic_series_result, GenericMetadata(issue_id="1"))
     result = Result(Action.save, Status.success, tmp_comic.path, online_results=[match])

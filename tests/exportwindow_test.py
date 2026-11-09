@@ -61,7 +61,7 @@ def test_export_conflict_and_source_deletion(tmp_path, monkeypatch, conflict, ex
     if expected_name is None:
         archive.export_as_zip.assert_not_called()
     else:
-        archive.export_as_zip.assert_called_once_with(tmp_path / expected_name)
+        archive.export_as_zip.assert_called_once_with(tmp_path / expected_name, overwrite=False)
     assert source.exists() is (expected_name is None or not success)
     selection.remove_archive_list.assert_called_once_with([archive] if expected_name and success else [])
     selection.add_path_list.assert_called_once_with(

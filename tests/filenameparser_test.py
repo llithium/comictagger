@@ -8,10 +8,27 @@ import comicapi.utils
 from testing.filenames import newfnames, oldfnames
 
 
+def test_parser_uses_only_the_explicit_publisher_registry(monkeypatch):
+    from comicapi import utils
+
+    filename = "My Series 001 (2020) (TestingPress).cbz"
+    monkeypatch.setattr(utils, "publishers", {})
+    utils.update_publishers({"TestingPress": {}})
+    parsed = utils.parse_filename(
+        filename, utils.Parser.COMPLICATED, remove_publisher=True, publisher_names=utils.publishers
+    )
+    assert parsed["publisher"] == "TestingPress"
+    assert parsed["remainder"] == ""
+
+    parsed = utils.parse_filename(filename, utils.Parser.COMPLICATED, remove_publisher=True)
+    assert parsed["publisher"] == ""
+    assert parsed["remainder"] == "(TestingPress)"
+
+
 @pytest.mark.parametrize("filename, reason, expected", newfnames)
 def test_complicated_file_name_parser(filename, reason, expected, load_publishers):
     protofolius_issue_number_scheme = bool(expected["issue"] and expected["issue"][0].isalpha())
-    lex = comicapi.filenamelexer.Lex(filename, protofolius_issue_number_scheme)
+    lex = comicapi.filenamelexer.Lex(filename, protofolius_issue_number_scheme, comicapi.utils.publishers)
     p = comicapi.filenameparser.Parse(
         lex.items,
         first_is_alt=True,

@@ -18,21 +18,18 @@ from __future__ import annotations
 
 import logging
 import pathlib
-import re
 
-from PyQt6 import QtCore, QtGui, QtWidgets, uic
+from PyQt6 import QtCore, QtWidgets, uic
 
 from comicapi import utils
 from comicapi.comicarchive import ComicArchive, tags
-from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.ctsettings.settngs_namespace import SettngsNS
 from comictaggerlib.issueidentifier import IssueIdentifierCancelled
-from comictaggerlib.md import read_selected_tags
-from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
+from comictaggerlib.md import parse_archive_filename, read_configured_tags, write_selected_tags
 from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Status
 from comictaggerlib.tag import identify_comic
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
 from comictalker.comictalker import ComicTalker, RLCallBack
 
 logger = logging.getLogger(__name__)
@@ -52,12 +49,14 @@ class AutoTagThread(QtCore.QThread):  # TODO: re-check thread semantics. Specifi
         self.ca_list = ca_list
         self.config = config
         self.talker = talker
-        self.canceled = False
 
     def log_output(self, text: str) -> None:
-        if self.canceled:
-            raise IssueIdentifierCancelled
+        self.check_canceled()
         self.autoTagLogMsg.emit(str(text))
+
+    def check_canceled(self) -> None:
+        if self.isInterruptionRequested():
+            raise IssueIdentifierCancelled
 
     def progress_callback(
         self, cur: int | None, total: int | None, path: pathlib.Path | None, archive_image: bytes, remote_image: bytes
@@ -69,157 +68,76 @@ class AutoTagThread(QtCore.QThread):  # TODO: re-check thread semantics. Specifi
         archives_to_remove = []
         try:
             for prog_idx, ca in enumerate(self.ca_list):
-                if self.canceled:
-                    return
+                self.check_canceled()
                 self.log_output("==========================================================================\n")
                 self.log_output(f"Auto-Tagging {prog_idx} of {len(self.ca_list)}\n")
                 self.log_output(f"{ca.path}\n")
-                try:
-                    cover_idx = ca.read_tags(self.config.Runtime_Options__tags_read[0]).get_cover_page_index_list()[0]
-                except Exception as e:
-                    cover_idx = 0
-                    logger.error("Failed to load metadata for %s: %s", ca.path, e)
-                image_data = ca.get_page(cover_idx)
-                self.progress_callback(prog_idx, len(self.ca_list), ca.path, image_data, b"")
-                if self.canceled:
-                    return
-
                 if ca.is_writable():
-                    success, match_results = self.identify_and_tag_single_archive(ca, match_results)
-                    if self.canceled:
-                        return
-
-                    if success and self.config.internal__remove_archive_after_successful_match:
+                    result = self.identify_and_tag_single_archive(ca, prog_idx)
+                    match_results.record(result)
+                    if result.status == Status.success and self.config.internal__remove_archive_after_successful_match:
                         archives_to_remove.append(ca)
+        except IssueIdentifierCancelled:
+            pass
         finally:
             self.autoTagComplete.emit(match_results, archives_to_remove)
 
     def on_rate_limit(self, full_time: float, sleep_time: float) -> None:
-        if self.canceled:
-            raise IssueIdentifierCancelled
         self.log_output(
             f"Rate limit reached: {full_time:.0f}s until next request. Waiting {sleep_time:.0f}s for ratelimit"
         )
         self.ratelimit.emit(full_time, sleep_time)
 
-    def identify_and_tag_single_archive(
-        self, ca: ComicArchive, match_results: OnlineMatchResults
-    ) -> tuple[Result, OnlineMatchResults]:
-
-        ratelimit_callback = RLCallBack(
-            self.on_rate_limit,
-            60,
-        )
-
-        # read in tags, and parse file name if not there
-        md, tags_used, error = read_selected_tags(self.config.Runtime_Options__tags_read, ca)
+    def identify_and_tag_single_archive(self, ca: ComicArchive, progress: int) -> Result:
+        md, tags_used, error = read_configured_tags(ca, self.config.Runtime_Options__tags_read, self.config)
         if error is not None:
-            OptionalMessageDialog.critical(
-                None,
-                "Aborting...",
-                f"One or more of the read tags failed to load for {ca.path}. Aborting to prevent any possible further damage. Check log for details.",
-            )
             logger.error("Failed to load tags from %s: %s", ca.path, error)
-            return (
-                Result(
-                    Action.save,
-                    original_path=ca.path,
-                    status=Status.read_failure,
-                ),
-                match_results,
-            )
+            return Result(Action.save, Status.read_failure, ca.path, tags_read=tags_used)
 
+        cover_idx = next(iter(md.get_cover_page_index_list()), 0)
+        self.progress_callback(progress, len(self.ca_list), ca.path, ca.get_page(cover_idx), b"")
         if md.is_empty:
-            md = ca.metadata_from_filename(
-                self.config.Filename_Parsing__filename_parser,
-                self.config.Filename_Parsing__remove_c2c,
-                self.config.Filename_Parsing__remove_fcbd,
-                self.config.Filename_Parsing__remove_publisher,
-                self.config.Filename_Parsing__split_words,
-                self.config.Filename_Parsing__allow_issue_start_with_letter,
-                self.config.Filename_Parsing__protofolius_issue_number_scheme,
-            )
-            if self.config.Auto_Tag__ignore_leading_numbers_in_filename and md.series is not None:
-                # remove all leading numbers
-                md.series = re.sub(r"(^[\d.]*)(.*)", r"\2", md.series)
+            md = parse_archive_filename(ca, self.config)
 
-        # use the dialog specified search string
         if self.series_override:
             md.series = self.series_override
-
-        if not self.config.Auto_Tag__use_year_when_identifying:
-            md.year = None
-        # If it's empty we need it to stay empty for identify_comic to report the correct error
-        if (md.issue is None or md.issue == "") and not md.is_empty:
-            if self.config.Auto_Tag__assume_issue_one:
-                md.issue = "1"
-            else:
-                md.issue = utils.xlate(md.volume)
+        query_md = md.copy()
+        if not query_md.issue and not query_md.is_empty:
+            query_md.issue = "1" if self.config.Auto_Tag__assume_issue_one else utils.xlate(query_md.volume)
 
         def on_progress(x: int, y: int, image: bytes) -> None:
-            # We don't (currently) care about the progress of an individual comic here we just want the cover for the autotagprogresswindow
+            self.check_canceled()
             self.progress_callback(None, None, None, b"", image)
 
-        if self.canceled:
-            return (
-                Result(
-                    Action.save,
-                    original_path=ca.path,
-                    status=Status.read_failure,
-                ),
-                match_results,
-            )
+        self.check_canceled()
+        result = identify_comic(
+            ca,
+            md,
+            tags_used,
+            self.config,
+            self.talker,
+            self.log_output,
+            on_rate_limit=RLCallBack(self.on_rate_limit, 60),
+            on_progress=on_progress,
+            query_md=query_md,
+            series_override=self.series_override,
+        )
+        self.check_canceled()
 
-        try:
-            res, match_results = identify_comic(
-                ca,
-                md,
-                tags_used,
-                match_results,
-                self.config,
-                self.talker,
-                self.log_output,
-                on_rate_limit=ratelimit_callback,
-                on_progress=on_progress,
-            )
-        except IssueIdentifierCancelled:
-            return (
-                Result(
-                    Action.save,
-                    original_path=ca.path,
-                    status=Status.fetch_data_failure,
-                ),
-                match_results,
-            )
-        if self.canceled:
-            return res, match_results
-
-        if res.status == Status.success:
-            assert res.md
-
-            def write_Tags(ca: ComicArchive, md: GenericMetadata) -> bool:
-                for tag_id in self.config.Runtime_Options__tags_write:
-                    # write out the new data
-                    if not ca.write_tags(md, tag_id):
-                        self.log_output(f"{tags[tag_id].name()} save failed! Aborting any additional tag saves.\n")
-                        return False
-                return True
-
-            # Save tags
-            if write_Tags(ca, res.md):
-                match_results.good_matches.append(res)
-                res.tags_written = self.config.Runtime_Options__tags_write
-                self.log_output("Save complete!\n")
-            else:
-                res.status = Status.write_failure
-                match_results.write_failures.append(res)
-
+        if result.status == Status.success:
+            assert result.md is not None
+            result.tags_written, failed = write_selected_tags(ca, result.md, self.config.Runtime_Options__tags_write)
             ca.reset_cache()
+            if failed is None:
+                self.autoTagLogMsg.emit("Save complete!\n")
+            else:
+                result.status = Status.write_failure
+                self.autoTagLogMsg.emit(f"{tags[failed].name()} save failed! Aborting any additional tag saves.\n")
 
-        return res, match_results
+        return result
 
     def cancel(self) -> None:
-        self.canceled = True
+        self.requestInterruption()
 
 
 class AutoTagProgressWindow(QtWidgets.QDialog):
@@ -250,16 +168,7 @@ class AutoTagProgressWindow(QtWidgets.QDialog):
                 | QtCore.Qt.WindowType.WindowMaximizeButtonHint
             )
         )
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)
 
     def set_archive_image(self, img_data: bytes) -> None:
         self.set_cover_image(img_data, self.archiveCoverWidget)

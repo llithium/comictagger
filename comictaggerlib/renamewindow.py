@@ -17,20 +17,21 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import settngs
-from PyQt6 import QtCore, QtGui, QtWidgets, uic
+from PyQt6 import QtCore, QtWidgets, uic
 from PyQt6.QtGui import QColorConstants
 
 from comicapi import utils
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.ctsettings import ct_ns
-from comictaggerlib.filerenamer import FileRenamer, FileRenamerConfig, get_rename_dir
-from comictaggerlib.md import read_selected_tags
+from comictaggerlib.filerenamer import MissingRenameDirectory, RenamePlan
+from comictaggerlib.md import parse_archive_filename, read_configured_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.settingswindow import SettingsWindow
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
 from comictalker.comictalker import ComicTalker
 
@@ -45,6 +46,8 @@ class RenameWindow(QtWidgets.QDialog):
         read_tag_ids: list[str],
         config: settngs.Config[ct_ns],
         talkers: dict[str, ComicTalker],
+        *,
+        rename_example: Callable[[], tuple[GenericMetadata, str] | None] | None = None,
     ) -> None:
         super().__init__(parent)
 
@@ -65,105 +68,62 @@ class RenameWindow(QtWidgets.QDialog):
         self.talkers = talkers
         self.comic_archive_list = comic_archive_list
         self.read_tag_ids = read_tag_ids
-        self.rename_list: list[str] = []
+        self.rename_plans: list[RenamePlan] = []
+        self.rename_example = rename_example
+        self.tag_names_changed = False
 
         self.btnSettings.clicked.connect(self.modify_settings)
-        self.renamer = FileRenamer(None)
 
         self.do_preview()
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
-
-    def config_renamer(self, ca: ComicArchive, md: GenericMetadata | None = None) -> tuple[str, Exception | None]:
-        self.renamer.apply_config(FileRenamerConfig.from_settings(self.config[0]))
-        error = None
-
-        new_ext = ca.path.suffix  # default
-        if self.config[0].File_Rename__auto_extension:
-            new_ext = ca.extension()
-
-        if md is None or md.is_empty:
-            md, _, error = read_selected_tags(
-                self.read_tag_ids,
-                ca,
-                self.config[0].Metadata_Options__tag_merge,
-                self.config[0].Metadata_Options__tag_merge_lists,
-            )
-            if error is not None:
-                logger.error("Failed to load tags from %s: %s", ca.path, error)
-
-            if md.is_empty:
-                md = ca.metadata_from_filename(
-                    self.config[0].Filename_Parsing__filename_parser,
-                    self.config[0].Filename_Parsing__remove_c2c,
-                    self.config[0].Filename_Parsing__remove_fcbd,
-                    self.config[0].Filename_Parsing__remove_publisher,
-                )
-        self.renamer.set_metadata(md, ca.path.name)
-        return new_ext, error
+        qtutils.add_dialog_shortcuts(self)
 
     def do_preview(self) -> None:
         self.twList.setRowCount(0)
-        self.rename_list.clear()
-
-        if self.config[0].File_Rename__kapowarr_naming and not self.config[0].File_Rename__dir.strip():
-            OptionalMessageDialog.warning(
-                self,
-                "Kapowarr library root required",
-                "Set Destination Directory to the Kapowarr library root before previewing compatible renames.",
-            )
-            return
-
-        self.twList.setSortingEnabled(False)
-
+        self.rename_plans.clear()
+        plans = []
         errors = False
+        self.twList.setSortingEnabled(False)
         for ca in self.comic_archive_list:
-            new_ext, error = self.config_renamer(ca)
-            errors = errors or error is not None
-            try:
-                new_name = self.renamer.determine_name(new_ext)
-            except ValueError as e:
-                logger.exception("Invalid format string: %s", self.config[0].File_Rename__template)
-                OptionalMessageDialog.critical(
-                    self,
-                    "Invalid format string!",
-                    "Your rename template is invalid!"
-                    f"\n\n{e}\n\n"
-                    "Please consult the template help in the "
-                    "settings and the documentation on the format at "
-                    "https://docs.python.org/3/library/string.html#format-string-syntax",
-                )
-                return
-            except Exception as e:
-                logger.exception(
-                    "Formatter failure: %s metadata: %s", self.config[0].File_Rename__template, self.renamer.metadata
-                )
-                OptionalMessageDialog.critical(
-                    self,
-                    "The formatter had an issue!",
-                    "The formatter has experienced an unexpected error!"
-                    f"\n\n{type(e).__name__}: {e}\n\n"
-                    "Please open an issue at "
-                    "https://github.com/llithium/comictagger/issues",
-                )
-                return
-
-            folder = get_rename_dir(
-                ca,
-                (
-                    self.config[0].File_Rename__dir
-                    if self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
-                    else None
-                ),
-            )
+            md, _, error = read_configured_tags(ca, self.read_tag_ids, self.config[0])
+            if error is not None:
+                errors = True
+                logger.error("Failed to load tags from %s: %s", ca.path, error)
+                folder = ca.path.parent
+                new_name = ""
+            else:
+                if md.is_empty:
+                    md = parse_archive_filename(ca, self.config[0])
+                try:
+                    plan = RenamePlan.build(ca, md, self.config[0])
+                except MissingRenameDirectory:
+                    OptionalMessageDialog.warning(
+                        self,
+                        "Kapowarr library root required",
+                        "Set Destination Directory to the Kapowarr library root before previewing compatible renames.",
+                    )
+                    return
+                except ValueError as e:
+                    logger.exception("Invalid format string: %s", self.config[0].File_Rename__template)
+                    OptionalMessageDialog.critical(
+                        self,
+                        "Invalid format string!",
+                        f"Your rename template is invalid!\n\n{e}\n\n"
+                        "Please consult the template help in the settings and the documentation on the format at "
+                        "https://docs.python.org/3/library/string.html#format-string-syntax",
+                    )
+                    return
+                except Exception as e:
+                    logger.exception("Formatter failure: %s metadata: %s", self.config[0].File_Rename__template, md)
+                    OptionalMessageDialog.critical(
+                        self,
+                        "The formatter had an issue!",
+                        f"The formatter has experienced an unexpected error!\n\n{type(e).__name__}: {e}\n\n"
+                        "Please open an issue at https://github.com/llithium/comictagger/issues",
+                    )
+                    return
+                plans.append(plan)
+                folder = plan.folder
+                new_name = plan.name
 
             row = self.twList.rowCount()
             self.twList.insertRow(row)
@@ -192,7 +152,7 @@ class RenameWindow(QtWidgets.QDialog):
                 new_name_item.setText(new_name)
             new_name_item.setData(QtCore.Qt.ItemDataRole.ToolTipRole, new_name)
 
-            self.rename_list.append(new_name)
+        self.rename_plans = plans
 
         # Adjust column sizes
         self.twList.setVisible(False)
@@ -208,7 +168,7 @@ class RenameWindow(QtWidgets.QDialog):
             )
 
     def modify_settings(self) -> None:
-        self.settingswin = SettingsWindow(self, self.config, self.talkers)
+        self.settingswin = SettingsWindow(self, self.config, self.talkers, rename_example=self.rename_example)
         self.settingswin.setModal(True)
         self.settingswin.show_rename_tab()
         self.settingswin.accepted.connect(self.settings_closed)
@@ -216,18 +176,13 @@ class RenameWindow(QtWidgets.QDialog):
 
     def settings_closed(self) -> None:
         self.config = self.settingswin.config
+        self.tag_names_changed |= self.settingswin.tag_names_changed
         self.do_preview()
 
     def accept(self) -> None:
-        if self.config[0].File_Rename__kapowarr_naming and not self.config[0].File_Rename__dir.strip():
-            OptionalMessageDialog.warning(
-                self,
-                "Kapowarr library root required",
-                "Set Destination Directory to the Kapowarr library root before renaming files.",
-            )
+        if not self.rename_plans:
             return
-
-        prog_dialog = QtWidgets.QProgressDialog("", "Cancel", 0, len(self.rename_list), self)
+        prog_dialog = QtWidgets.QProgressDialog("", "Cancel", 0, len(self.rename_plans), self)
         prog_dialog.setWindowTitle("Renaming Archives")
         prog_dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         prog_dialog.setMinimumDuration(100)
@@ -235,57 +190,29 @@ class RenameWindow(QtWidgets.QDialog):
         QtCore.QCoreApplication.processEvents()
 
         failed_renames: list[tuple[str, str, OSError]] = []
-        try:
-            for idx, comic in enumerate(zip(self.comic_archive_list, self.rename_list), 1):
-                if prog_dialog.wasCanceled():
-                    break
+        for idx, plan in enumerate(self.rename_plans, 1):
+            if prog_dialog.wasCanceled():
+                break
+            prog_dialog.setValue(idx)
+            prog_dialog.setLabelText(plan.name)
+            if idx % 5 == 0:
+                QtCore.QCoreApplication.processEvents()
 
-                prog_dialog.setValue(idx)
-                prog_dialog.setLabelText(comic[1])
-                if idx % 5 == 0:
-                    QtCore.QCoreApplication.processEvents()
+            archive = plan.archive
+            if plan.target == archive.path:
+                logger.info("%s: Filename is already good!", plan.name)
+                continue
+            if not archive.is_writable(check_archive_status=False):
+                continue
 
-                folder = get_rename_dir(
-                    comic[0],
-                    (
-                        self.config[0].File_Rename__dir
-                        if self.config[0].File_Rename__move or self.config[0].File_Rename__kapowarr_naming
-                        else None
-                    ),
+            target = plan.available_target()
+            try:
+                plan.apply(target)
+            except OSError as e:
+                logger.exception("Failed to rename comic archive: %s", archive.path)
+                failed_renames.append(
+                    (utils.path_to_short_str(archive.path), utils.path_to_short_str(archive.path, target), e)
                 )
-
-                full_path = folder / comic[1]
-
-                if full_path == comic[0].path:
-                    logger.info("%s: Filename is already good!", comic[1])
-                    continue
-
-                if not comic[0].is_writable(check_archive_status=False):
-                    continue
-
-                new_name = utils.unique_file(full_path)
-                try:
-                    comic[0].rename(
-                        new_name,
-                        remove_empty_source_dir=self.config[0].File_Rename__kapowarr_naming,
-                    )
-                except OSError as e:
-                    logger.exception("Failed to rename comic archive: %s", comic[0].path)
-                    failed_renames.append(
-                        (
-                            utils.path_to_short_str(comic[0].path),
-                            utils.path_to_short_str(comic[0].path, new_name),
-                            e,
-                        )
-                    )
-        except Exception as e:
-            assert comic
-            logger.exception("Failed to rename comic archive: %s", comic[0].path)
-            OptionalMessageDialog.critical(
-                self,
-                "There was an issue when renaming!",
-                f"Renaming failed!\n\n{type(e).__name__}: {e}\n\n",
-            )
 
         if failed_renames:
             OptionalMessageDialog.critical(

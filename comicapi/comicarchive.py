@@ -19,18 +19,20 @@ import hashlib
 import importlib.util
 import inspect
 import io
-import itertools
 import logging
 import os
 import pathlib
 import shutil
+from collections import Counter
 from collections.abc import Callable, Iterable
+from functools import cache
 from typing import cast
 
 from comicapi import utils
 from comicapi.archivers import Archiver, UnknownArchiver, ZipArchiver
 from comicapi.archivers.archiver import BulkRemoveArchiver, read_archive
 from comicapi.genericmetadata import FileHash, GenericMetadata
+from comicapi.pluginloader import ARCHIVER_ENTRY_POINT, TAG_ENTRY_POINT
 from comicapi.tags import Tag
 from comictaggerlib.ctversion import version
 
@@ -40,8 +42,8 @@ archivers: list[type[Archiver]] = []
 tags: dict[str, Tag] = {}
 
 
-def load_archive_plugins(local_plugins: Iterable[type[Archiver]] = tuple()) -> None:
-    if archivers:
+def load_archive_plugins(local_plugins: Iterable[type[Archiver]] | None = None) -> None:
+    if archivers and local_plugins is None:
         return
     from importlib.metadata import entry_points
 
@@ -49,7 +51,7 @@ def load_archive_plugins(local_plugins: Iterable[type[Archiver]] = tuple()) -> N
     archive_plugins: list[type[Archiver]] = []
     # A list is used first matching plugin wins
 
-    for ep in itertools.chain(entry_points(group="comicapi.archiver")):
+    for ep in entry_points(group=ARCHIVER_ENTRY_POINT):
         try:
             spec = importlib.util.find_spec(ep.module)
         except Exception:
@@ -67,20 +69,20 @@ def load_archive_plugins(local_plugins: Iterable[type[Archiver]] = tuple()) -> N
             else:
                 logger.exception("Failed to load archive plugin: %s", ep.name)
     archivers.clear()
-    archivers.extend(local_plugins)
+    archivers.extend(local_plugins or ())
     archivers.extend(archive_plugins)
     archivers.extend(builtin)
 
 
-def load_tag_plugins(version: str = f"ComicAPI/{version}", local_plugins: Iterable[type[Tag]] = tuple()) -> None:
-    if tags:
+def load_tag_plugins(version: str = f"ComicAPI/{version}", local_plugins: Iterable[type[Tag]] | None = None) -> None:
+    if tags and local_plugins is None:
         return
     from importlib.metadata import entry_points
 
     builtin: dict[str, Tag] = {}
     tag_plugins: dict[str, tuple[Tag, str]] = {}
     # A dict is used, last plugin wins
-    for ep in entry_points(group="comicapi.tags"):
+    for ep in entry_points(group=TAG_ENTRY_POINT):
         location = "Unknown"
         try:
             _spec = importlib.util.find_spec(ep.module)
@@ -106,8 +108,11 @@ def load_tag_plugins(version: str = f"ComicAPI/{version}", local_plugins: Iterab
         except Exception:
             logger.exception("Failed to load tag plugin: %s from %s", ep.name, location)
     # A dict is used, last plugin wins
-    for tag in local_plugins:
-        tag_plugins[tag.id] = (tag(version), "Local")
+    for tag in local_plugins or ():
+        try:
+            tag_plugins[tag.id] = (tag(version), "Local")
+        except Exception:
+            logger.exception("Failed to load local tag plugin: %s", tag)
 
     for tag_id in set(builtin.keys()).intersection(tag_plugins):
         location = tag_plugins[tag_id][1]
@@ -118,9 +123,12 @@ def load_tag_plugins(version: str = f"ComicAPI/{version}", local_plugins: Iterab
     tags.update({s[0]: s[1][0] for s in tag_plugins.items()})
 
 
+@cache
+def _read_placeholder(path: pathlib.Path) -> bytes:
+    return path.read_bytes()
+
+
 class ComicArchive:
-    logo_data = b""
-    pil_available: bool | None = None
 
     def __init__(
         self,
@@ -128,12 +136,9 @@ class ComicArchive:
         default_image_path: pathlib.Path | str | None = None,
         hash_archive: str = "",
     ) -> None:
-        self.md: dict[str, GenericMetadata] = {}
-        self.page_count: int | None = None
-        self.page_list: list[str] = []
+        self._tag_cache: dict[str, GenericMetadata] = {}
+        self._page_names: list[str] | None = None
         self.hash_archive = hash_archive
-
-        self.reset_cache()
         self.default_image_path = default_image_path
 
         if isinstance(path, Archiver):
@@ -147,7 +152,11 @@ class ComicArchive:
             load_tag_plugins()
             archiver_missing = True
             for archiver in archivers:
-                if self.path.suffix in archiver.supported_extensions and archiver.is_valid(self.path):
+                if (
+                    archiver.enabled
+                    and self.path.suffix in archiver.supported_extensions
+                    and archiver.is_valid(self.path)
+                ):
                     self.archiver = archiver.open(self.path)
                     archiver_missing = False
                     break
@@ -158,27 +167,19 @@ class ComicArchive:
                         self.archiver = archiver.open(self.path)
                         break
 
-        if not ComicArchive.logo_data and self.default_image_path:
-            with open(self.default_image_path, mode="rb") as fd:
-                ComicArchive.logo_data = fd.read()
-
     def reset_cache(self) -> None:
-        """Clears the cached data"""
-
-        self.page_count = None
-        self.page_list.clear()
-        self.md.clear()
+        self._page_names = None
+        self._tag_cache.clear()
 
     def load_cache(self, tag_ids: Iterable[str]) -> None:
         for tag_id in tag_ids:
             if tag_id not in tags:
                 continue
-            tag = tags[tag_id]
-            if not tag.enabled:
-                continue
-            md = tag.read_tags(self.archiver)
+            md = self._read_tags(tag_id)
             if not md.is_empty:
-                self.md[tag_id] = md
+                self._tag_cache[tag_id] = md.copy()
+            else:
+                self._tag_cache.pop(tag_id, None)
 
     def get_supported_tags(self) -> list[str]:
         return [tag_id for tag_id, tag in tags.items() if tag.enabled and tag.supports_tags(self.archiver)]
@@ -232,13 +233,18 @@ class ComicArchive:
         return self.archiver.extension()
 
     def read_tags(self, tag_id: str) -> GenericMetadata:
-        if tag_id in self.md:
-            return self.md[tag_id]
-        md = GenericMetadata()
+        if tag_id in self._tag_cache:
+            return self._tag_cache[tag_id].copy()
+        return self._read_tags(tag_id)
+
+    def _read_tags(self, tag_id: str) -> GenericMetadata:
         tag = tags[tag_id]
-        if tag.enabled and tag.has_tags(self.archiver):
-            md = tag.read_tags(self.archiver)
-            md.apply_default_page_list(self.get_page_name_list())
+        if not tag.enabled:
+            return GenericMetadata()
+        md = tag.read_tags(self.archiver)
+        # The presence check distinguishes an empty tag from no tag.
+        if not md.is_empty or tag.has_tags(self.archiver):
+            md.apply_default_page_list(self._get_page_names())
         return md
 
     def read_raw_tags(self, tag_id: str) -> str:
@@ -247,8 +253,7 @@ class ComicArchive:
         return tags[tag_id].read_raw_tags(self.archiver)
 
     def write_tags(self, metadata: GenericMetadata, tag_id: str) -> bool:
-        if tag_id in self.md:
-            del self.md[tag_id]
+        self._tag_cache.pop(tag_id, None)
         if not tags[tag_id].enabled:
             logger.warning("%s tags not enabled", tags[tag_id].name())
             return False
@@ -257,108 +262,70 @@ class ComicArchive:
         return tags[tag_id].write_tags(metadata, self.archiver)
 
     def has_tags(self, tag_id: str) -> bool:
-        if tag_id in self.md:
+        if tag_id in self._tag_cache:
             return True
         if not tags[tag_id].enabled:
             return False
         return tags[tag_id].has_tags(self.archiver)
 
     def remove_tags(self, tag_id: str) -> bool:
-        if tag_id in self.md:
-            del self.md[tag_id]
+        self._tag_cache.pop(tag_id, None)
         if not tags[tag_id].enabled:
             return False
         return tags[tag_id].remove_tags(self.archiver)
 
     def get_page(self, index: int, *, reader: Callable[[str], bytes] | None = None) -> bytes:
-        image_data = b""
-
         filename = self.get_page_name(index)
+        if not filename:
+            return b""
+        try:
+            return (reader or self.archiver.read_file)(filename) or b""
+        except Exception:
+            logger.exception("Error reading page %d from %s", index, self.path)
+            if self.default_image_path:
+                try:
+                    return _read_placeholder(pathlib.Path(self.default_image_path).absolute())
+                except OSError:
+                    logger.exception("Error reading placeholder image %s", self.default_image_path)
+            return b""
 
-        if filename:
-            try:
-                image_data = (reader or self.archiver.read_file)(filename) or b""
-            except Exception:
-                logger.exception("Error reading in page %d. Substituting logo page.", index)
-                image_data = ComicArchive.logo_data
-
-        return image_data
-
-    def get_page_name(self, index: int) -> str:
-        if index is None:
+    def get_page_name(self, index: int | None) -> str:
+        page_names = self._get_page_names()
+        if index is None or not -len(page_names) <= index < len(page_names):
             return ""
-
-        page_list = self.get_page_name_list()
-
-        num_pages = len(page_list)
-        if num_pages == 0 or index >= num_pages:
-            return ""
-
-        return page_list[index]
+        return page_names[index]
 
     def get_scanner_page_index(self) -> int | None:
-        scanner_page_index = None
-
-        # make a guess at the scanner page
-        name_list = self.get_page_name_list()
-        count = self.get_number_of_pages()
-
-        # too few pages to really know
-        if count < 5:
+        names = self._get_page_names()
+        # With fewer pages there is not enough evidence for a filename pattern.
+        if len(names) < 5:
             return None
+        basenames = [os.path.basename(name) for name in names]
+        lengths = Counter(map(len, basenames))
+        mode_length = max(lengths, key=lambda length: (lengths[length], length))
+        prefix = os.path.commonprefix([name for name in basenames if len(name) == mode_length])
+        final_name = basenames[-1]
+        if mode_length <= 7 and not prefix:
+            # A run of short names with no shared prefix is likely numbered.
+            is_scanner_page = len(final_name) > mode_length
+        else:
+            is_scanner_page = not final_name.startswith(prefix)
+        return len(names) - 1 if is_scanner_page else None
 
-        # count the length of every filename, and count occurrences
-        length_buckets: dict[int, int] = {}
-        for name in name_list:
-            fname = os.path.split(name)[1]
-            length = len(fname)
-            if length in length_buckets:
-                length_buckets[length] += 1
-            else:
-                length_buckets[length] = 1
-
-        # sort by most common
-        sorted_buckets = sorted(length_buckets.items(), key=lambda tup: (tup[1], tup[0]), reverse=True)
-
-        # statistical mode occurrence is first
-        mode_length = sorted_buckets[0][0]
-
-        # we are only going to consider the final image file:
-        final_name = os.path.split(name_list[count - 1])[1]
-
-        common_length_list = []
-        for name in name_list:
-            if len(os.path.split(name)[1]) == mode_length:
-                common_length_list.append(os.path.split(name)[1])
-
-        prefix = os.path.commonprefix(common_length_list)
-
-        if mode_length <= 7 and prefix == "":
-            # probably all numbers
-            if len(final_name) > mode_length:
-                scanner_page_index = count - 1
-
-        # see if the last page doesn't start with the same prefix as most others
-        elif not final_name.startswith(prefix):
-            scanner_page_index = count - 1
-
-        return scanner_page_index
+    def _get_page_names(self) -> list[str]:
+        if self._page_names is None:
+            self._page_names = utils.get_page_name_list(self.archiver.get_filename_list())
+        return self._page_names
 
     def get_page_name_list(self) -> list[str]:
-        if not self.page_list:
-            self.__import_pil__()  # Import pillow for list of supported extensions
-            self.page_list = utils.get_page_name_list(self.archiver.get_filename_list())
-
-        return self.page_list
+        return self._get_page_names().copy()
 
     def get_number_of_pages(self) -> int:
-        if self.page_count is None:
-            self.page_count = len(self.get_page_name_list())
-        return self.page_count
+        return len(self._get_page_names())
 
     def remove_pages(self, page_indexes: Iterable[int]) -> list[int]:
         """Remove image files from the archive and return the indexes successfully removed."""
-        page_names = self.get_page_name_list().copy()
+        page_names = self._get_page_names()
         indexes = sorted({index for index in page_indexes if 0 <= index < len(page_names)}, reverse=True)
         if isinstance(self.archiver, BulkRemoveArchiver):
             removed_names = set(self.archiver.remove_files([page_names[index] for index in indexes]))
@@ -372,22 +339,6 @@ class ComicArchive:
             self.reset_cache()
         return sorted(removed)
 
-    def __import_pil__(self) -> bool:
-        if self.pil_available is not None:
-            return self.pil_available
-
-        try:
-            from PIL import Image
-
-            Image.init()
-            utils.KNOWN_IMAGE_EXTENSIONS.update([ext for ext, typ in Image.EXTENSION.items() if typ in Image.OPEN])
-            self.pil_available = True
-        except Exception:
-            self.pil_available = False
-            logger.exception("Failed to load Pillow")
-            return False
-        return True
-
     def apply_archive_info_to_metadata(
         self,
         md: GenericMetadata,
@@ -396,15 +347,18 @@ class ComicArchive:
         *,
         hash_archive: str = "",
     ) -> None:
-        md.page_count = self.get_number_of_pages()
-        md.apply_default_page_list(self.get_page_name_list())
+        md.apply_default_page_list(self._get_page_names())
         if not self.seems_to_be_a_comic_archive():
             return
 
-        if hash_archive in hashlib.algorithms_available and not md.original_hash:
+        if (
+            hash_archive in hashlib.algorithms_available
+            and not md.original_hash
+            and getattr(self.archiver, "hashable", True)
+        ):
             hasher = getattr(hashlib, hash_archive, hash_archive)
             try:
-                with self.archiver.path.open("b+r") as archive:
+                with self.archiver.path.open("rb") as archive:
                     digest = utils.file_digest(archive, hasher)
                 if len(inspect.signature(digest.hexdigest).parameters) > 0:
                     length = digest.name.rpartition("_")[2]
@@ -418,22 +372,20 @@ class ComicArchive:
                 logger.exception("Failed to calculate original hash for '%s'", self.archiver.path)
         if not calc_page_sizes:
             return
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
         with read_archive(self.archiver) as reader:
             for p in md.pages:
                 if p.byte_size is None or p.height is None or p.width is None or p.double_page is None:
                     try:
                         data = self.get_page(p.archive_index, reader=reader)
                         p.byte_size = len(data)
-                        if not data or not self.__import_pil__():
+                        if not data or Image is None:
                             continue
-
-                        from PIL import Image
-
-                        im = Image.open(io.BytesIO(data))
-                        w, h = im.size
-
-                        p.height = h
-                        p.width = w
+                        with Image.open(io.BytesIO(data)) as im:
+                            p.width, p.height = im.size
                         if detect_double_page:
                             p.double_page = p.is_double_page()
                     except Exception as e:
@@ -448,6 +400,8 @@ class ComicArchive:
         split_words: bool = False,
         allow_issue_start_with_letter: bool = False,
         protofolius_issue_number_scheme: bool = False,
+        *,
+        publisher_names: Iterable[str] = (),
     ) -> GenericMetadata:
         metadata = GenericMetadata()
 
@@ -460,6 +414,7 @@ class ComicArchive:
             split_words=split_words,
             allow_issue_start_with_letter=allow_issue_start_with_letter,
             protofolius_issue_number_scheme=protofolius_issue_number_scheme,
+            publisher_names=publisher_names,
         )
         metadata.alternate_number = utils.xlate(filename_info.get("alternate", None))
         metadata.issue = utils.xlate(filename_info.get("issue", None))
@@ -486,13 +441,13 @@ class ComicArchive:
         if filename_info.get("format", None):
             metadata.format = filename_info["format"]
 
-        metadata.is_empty = False
         return metadata
 
-    def export_as_zip(self, zip_filename: pathlib.Path) -> bool:
-        if self.archiver.name() == "ZIP":
+    def export_as_zip(self, zip_filename: pathlib.Path, *, overwrite: bool = True) -> bool:
+        if self.is_zip():
             # nothing to do, we're already a zip
             return True
 
-        zip_archiver = ZipArchiver.open(zip_filename)
-        return zip_archiver.copy_from_archive(self.archiver)
+        zip_archiver = ZipArchiver()
+        zip_archiver.path = zip_filename
+        return zip_archiver.copy_from_archive(self.archiver, overwrite=overwrite)

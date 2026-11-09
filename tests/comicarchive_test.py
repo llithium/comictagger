@@ -11,6 +11,8 @@ import comicapi.archivers.rar
 import comicapi.archivers.zip
 import comicapi.comicarchive
 import comicapi.genericmetadata
+from comicapi.archivers.folder import FolderArchiver
+from comicapi.archivers.sevenzip import SevenZipArchiver
 from testing.filenames import datadir
 
 
@@ -41,6 +43,81 @@ def test_page_type_read(cbz):
 def test_read_tags(cbz, md_saved):
     md = cbz.read_tags("cr")
     assert md == md_saved
+
+
+def test_preloaded_tags_include_page_names_and_are_safe_to_edit(tmp_comic):
+    expected = tmp_comic.read_tags("cr")
+    tmp_comic.load_cache(["cr"])
+
+    editable = tmp_comic.read_tags("cr")
+    assert [page.filename for page in editable.pages] == [page.filename for page in expected.pages]
+    editable.pages[0].filename = "changed.jpg"
+    editable.series = "Changed in memory"
+
+    reread = tmp_comic.read_tags("cr")
+    assert reread.pages[0].filename == expected.pages[0].filename
+    assert reread.series == expected.series
+
+
+def test_failed_zip_export_preserves_destination(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page one")
+    (source / "002.jpg").write_bytes(b"page two")
+    archiver = FolderArchiver.open(source)
+    archive = comicapi.comicarchive.ComicArchive(archiver)
+    read_file = archiver.read_file
+    monkeypatch.setattr(archiver, "get_filename_list", lambda: ["001.jpg", "002.jpg"])
+
+    def fail_second_page(name):
+        if name == "002.jpg":
+            raise OSError("unreadable page")
+        return read_file(name)
+
+    monkeypatch.setattr(archiver, "read_file", fail_second_page)
+    destination = tmp_path / "export.cbz"
+    destination.write_bytes(b"previous export")
+
+    assert not archive.export_as_zip(destination)
+    assert destination.read_bytes() == b"previous export"
+    assert set(tmp_path.iterdir()) == {source, destination}
+
+
+def test_failed_seven_zip_replacement_preserves_original_archive(cbz, tmp_path, monkeypatch):
+    py7zr = pytest.importorskip("py7zr")
+    path = tmp_path / "archive.cb7"
+    archive = SevenZipArchiver.open(path)
+    assert archive.copy_from_archive(cbz.archiver)
+    original = path.read_bytes()
+
+    def fail_write(*args, **kwargs):
+        raise OSError("cannot write replacement member")
+
+    monkeypatch.setattr(py7zr.SevenZipFile, "writestr", fail_write)
+    assert not archive.write_file("ComicInfo.xml", b"<ComicInfo/>")
+
+    assert path.read_bytes() == original
+    assert set(tmp_path.iterdir()) == {path}
+
+
+def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    archiver = FolderArchiver.open(source)
+    archive = comicapi.comicarchive.ComicArchive(archiver)
+    destination = tmp_path / "export.cbz"
+    read_file = archiver.read_file
+
+    def create_destination_during_read(name):
+        destination.write_bytes(b"another export")
+        return read_file(name)
+
+    monkeypatch.setattr(archiver, "read_file", create_destination_during_read)
+
+    assert not archive.export_as_zip(destination, overwrite=False)
+    assert destination.read_bytes() == b"another export"
+    assert set(tmp_path.iterdir()) == {source, destination}
 
 
 def test_write_cr(tmp_comic):

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import datetime
-import importlib
 import io
 import shutil
 import unittest.mock
@@ -11,28 +10,21 @@ from collections.abc import Generator
 from typing import Any
 
 import pytest
+import requests
 import settngs
 from PIL import Image
 
 import comicapi.comicarchive
-import comicapi.filenamelexer
-import comicapi.genericmetadata
 import comictaggerlib.cli
 import comictaggerlib.ctsettings
 import comictalker
 import comictalker.comiccacher
 import comictalker.talkers.comicvine
 from comicapi import utils
+from comicapi._metadata_example import example_metadata
 from comictalker.vendor.pyrate_limiter import Limiter, RequestRate
 from testing import comicvine, filenames
 from testing.comicdata import all_seed_imprints, seed_imprints
-
-try:
-    import niquests as requests
-except ModuleNotFoundError as error:
-    if error.name != "niquests":
-        raise
-    import requests
 
 
 @pytest.fixture
@@ -65,30 +57,11 @@ def load_publishers(monkeypatch) -> None:
     monkeypatch.setattr("comicapi.utils.publishers", {})
     utils.load_publishers()
 
-    def add_publisher_to_lexer(publisher: str) -> None:
-        publisher = publisher.casefold()
-        if " " not in publisher and publisher not in comicapi.filenamelexer.key:
-            comicapi.filenamelexer.key[publisher] = comicapi.filenamelexer.ItemType.Publisher
-
-    for publisher, imprints in utils.publishers.items():
-        add_publisher_to_lexer(publisher)
-
 
 @pytest.fixture(autouse=True)
 def no_requests(monkeypatch) -> None:
     """Remove requests.sessions.Session.request for all tests."""
-    for module_name in ("niquests", "requests"):
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError as error:
-            if error.name == module_name:
-                continue
-            raise
-
-        sessions = getattr(module, "sessions", None)
-        session_type = getattr(sessions, "Session", None)
-        if getattr(session_type, "request", None) is not None:
-            monkeypatch.delattr(f"{module_name}.sessions.Session.request")
+    monkeypatch.delattr(requests.Session, "request")
 
 
 @pytest.fixture
@@ -196,12 +169,12 @@ def mock_version(monkeypatch):
 
 @pytest.fixture
 def md():
-    yield comicapi.genericmetadata.md_test.copy()
+    yield example_metadata.copy()
 
 
 @pytest.fixture
 def md_saved():
-    yield comicapi.genericmetadata.md_test.replace(data_origin=None, issue_id=None, series_id=None)
+    yield example_metadata.replace(data_origin=None, issue_id=None, series_id=None)
 
 
 # manually seeds publishers

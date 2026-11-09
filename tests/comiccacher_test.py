@@ -20,7 +20,6 @@ def test_create_cache(config, mock_version):
         [comictalker.comiccacher.Series(id="1", data=b"{}")],
         True,
     )
-    cache.close()
 
     reset_cache = comictalker.comiccacher.ComicCacher(cache_dir, mock_version[0] + ".next")
     assert reset_cache.get_search_results("test", "versioned search") == []

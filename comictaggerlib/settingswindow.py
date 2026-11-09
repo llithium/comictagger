@@ -22,8 +22,8 @@ import os
 import pathlib
 import platform
 import shutil
-import textwrap
 import urllib.parse
+from collections.abc import Callable
 from typing import Any, cast
 
 import settngs
@@ -31,52 +31,20 @@ from PyQt6 import QtCore, QtGui, QtWidgets, uic
 
 import comictaggerlib.ui.talkeruigenerator
 from comicapi import merge, utils
-from comicapi.archivers.archiver import Archiver
-from comicapi.genericmetadata import GenericMetadata, md_test
+from comicapi._metadata_example import example_metadata
+from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib import ctsettings
 from comictaggerlib.ctsettings import ct_ns
-from comictaggerlib.ctsettings.plugin import group_for_plugin
+from comictaggerlib.ctsettings.plugin import ARCHIVE_GROUP
 from comictaggerlib.filerenamer import FileRenamer, FileRenamerConfig, Replacement, Replacements
 from comictaggerlib.imagefetcher import ImageFetcher
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
+from comictaggerlib.ui.rarhelp import LINUX_RAR_HELP, MAC_RAR_HELP, WINDOWS_RAR_HELP
 from comictalker.comiccacher import ComicCacher
 from comictalker.comictalker import ComicTalker
 
 logger = logging.getLogger(__name__)
-
-windowsRarHelp = textwrap.dedent("""
-                To write to CBR/RAR archives,
-                you will need to have the tools from
-                [WINRar](http://www.win-rar.com/download.html)
-                installed. (ComicTagger only uses the command-line rar tool.)
-
-                A restart is needed for a new path to take effect.
-                """)
-
-linuxRarHelp = textwrap.dedent("""
-                To write to CBR/RAR archives,
-                you will need to have the shareware rar tool from RARLab installed.
-                Your package manager should have rar (e.g. "apt-get install rar"). If not, download it
-                from [RARLab](https://www.rarlab.com/download.htm),
-                and install in your path.
-
-                A restart is needed for a new path to take effect.
-                """)
-
-macRarHelp = textwrap.dedent("""
-                To write to CBR/RAR archives,
-                you will need the rar tool.  The easiest way to get this is
-                to install [homebrew](https://brew.sh/).
-
-                Once homebrew is installed, run:
-                ```bash
-                brew install rar
-                ```
-
-                A restart is needed for a new path to take effect.
-                """)
-
 
 template_tooltip = """
 The template for the new filename. Uses python format strings https://docs.python.org/3/library/string.html#format-string-syntax
@@ -148,7 +116,12 @@ Spider-Geddon #1 - New Players; Check In
 
 class SettingsWindow(QtWidgets.QDialog):
     def __init__(
-        self, parent: QtWidgets.QWidget, config: settngs.Config[ct_ns], talkers: dict[str, ComicTalker]
+        self,
+        parent: QtWidgets.QWidget,
+        config: settngs.Config[ct_ns],
+        talkers: dict[str, ComicTalker],
+        *,
+        rename_example: Callable[[], tuple[GenericMetadata, str] | None] | None = None,
     ) -> None:
         super().__init__(parent)
 
@@ -166,18 +139,20 @@ class SettingsWindow(QtWidgets.QDialog):
         self.talkers = talkers
         self.name = "Settings"
         self.rename_test_name = ""
+        self.rename_example = rename_example
+        self.tag_names_changed = False
 
         self.setModal(True)
 
         if platform.system() == "Windows":
-            self.lblRarHelp.setText(windowsRarHelp)
+            self.lblRarHelp.setText(WINDOWS_RAR_HELP)
 
         elif platform.system() == "Linux":
-            self.lblRarHelp.setText(linuxRarHelp)
+            self.lblRarHelp.setText(LINUX_RAR_HELP)
 
         elif platform.system() == "Darwin":
 
-            self.lblRarHelp.setText(macRarHelp)
+            self.lblRarHelp.setText(MAC_RAR_HELP)
             self.name = "Preferences"
 
         self.setWindowTitle("ComicTagger " + self.name)
@@ -241,16 +216,7 @@ class SettingsWindow(QtWidgets.QDialog):
         # Set General as start tab
         self.tabWidget.setCurrentIndex(0)
 
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)
 
     def connect_signals(self) -> None:
         self.btnBrowseRar.clicked.connect(self.select_rar)
@@ -341,6 +307,7 @@ class SettingsWindow(QtWidgets.QDialog):
             split_words=self.cbxSplitWords.isChecked(),
             allow_issue_start_with_letter=self.cbxAllowIssueStartWithLetter.isChecked(),
             protofolius_issue_number_scheme=self.cbxProtofoliusIssueNumberScheme.isChecked(),
+            publisher_names=utils.publishers,
         )
         report = ""
         for item in (
@@ -432,21 +399,8 @@ class SettingsWindow(QtWidgets.QDialog):
                 replacements=self.get_replacements(),
             )
         )
-        from . import gui
-
-        if not gui.tagger_window:
-            return
-        gui.tagger_window.form_to_metadata()
-        metadata = md_test
-        name = "cory doctorow #1.cbz"
-
-        md: GenericMetadata = gui.tagger_window.metadata.copy()
-        md.series = None
-        md.pages = []
-
-        if gui.tagger_window.comic_archive and not md.is_empty:
-            metadata = gui.tagger_window.metadata
-            name = gui.tagger_window.comic_archive.path.name
+        sample = self.rename_example() if self.rename_example is not None else None
+        metadata, name = sample if sample is not None else (example_metadata.copy(), "cory doctorow #1.cbz")
 
         fr.set_metadata(metadata, name)
         try:
@@ -486,10 +440,8 @@ class SettingsWindow(QtWidgets.QDialog):
 
     def settings_to_form(self) -> None:
         self.disconnect_signals()
-        # Copy values from settings to form
-        archive_group = group_for_plugin(Archiver)
-        if archive_group in self.config[1] and "rar" in self.config[1][archive_group].v:
-            self.leRarExePath.setText(getattr(self.config[0], self.config[1][archive_group].v["rar"].internal_name))
+        if ARCHIVE_GROUP in self.config[1] and "rar" in self.config[1][ARCHIVE_GROUP].v:
+            self.leRarExePath.setText(self.config[0].Archive__rar)
         else:
             self.leRarExePath.setEnabled(False)
         self.sbNameMatchIdentifyThresh.setValue(self.config[0].Issue_Identifier__series_match_identify_thresh)
@@ -621,14 +573,10 @@ class SettingsWindow(QtWidgets.QDialog):
             )
             return
 
-        # Copy values from form to settings and save
-        archive_group = group_for_plugin(Archiver)
-        if archive_group in self.config[1] and "rar" in self.config[1][archive_group].v:
-            setattr(self.config[0], self.config[1][archive_group].v["rar"].internal_name, str(self.leRarExePath.text()))
-
-            # make sure rar program is now in the path for the rar class
+        if ARCHIVE_GROUP in self.config[1] and "rar" in self.config[1][ARCHIVE_GROUP].v:
+            self.config[0].Archive__rar = self.leRarExePath.text()
             if self.config[0].Archive__rar:
-                utils.add_to_path(os.path.dirname(str(self.leRarExePath.text())))
+                utils.add_to_path(os.path.dirname(self.config[0].Archive__rar))
 
         if not str(self.leIssueNumPadding.text()).isdigit():
             self.leIssueNumPadding.setText("0")
@@ -673,15 +621,9 @@ class SettingsWindow(QtWidgets.QDialog):
         self.config[0].Metadata_Options__metadata_merge_lists = self.cbxMergeListsMetadata.isChecked()
         self.config[0].Metadata_Options__cr = self.cbxEnableCR.isChecked()
 
-        from . import gui
-
-        if not gui.tagger_window:
-            return
-        # Update tag names if required
-        if self.config[0].Metadata_Options__use_short_tag_names != self.cbxShortTagNames.isChecked():
-            self.config[0].Metadata_Options__use_short_tag_names = self.cbxShortTagNames.isChecked()
-            gui.tagger_window.populate_tag_names()
-            gui.tagger_window.adjust_tags_combo()
+        short_tag_names = self.cbxShortTagNames.isChecked()
+        self.tag_names_changed = self.config[0].Metadata_Options__use_short_tag_names != short_tag_names
+        self.config[0].Metadata_Options__use_short_tag_names = short_tag_names
 
         self.config[0].File_Rename__template = str(self.leRenameTemplate.text())
         self.config[0].File_Rename__issue_number_padding = int(self.leIssueNumPadding.text())
@@ -701,8 +643,7 @@ class SettingsWindow(QtWidgets.QDialog):
 
         self.update_talkers_config()
 
-        ctsettings.save_file(self.config, self.config[0].Runtime_Options__config.user_config_dir / "settings.json")
-        self.parent().config = self.config
+        ctsettings.save_file(self.config, self.config[0].Runtime_Options__config.settings_file)
         QtWidgets.QDialog.accept(self)
 
     def update_talkers_config(self) -> None:

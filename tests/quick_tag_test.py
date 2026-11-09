@@ -29,7 +29,6 @@ def hashes(issue_id, *distances):
 def quick_tag(tmp_path, talker=None):
     config = SimpleNamespace(Runtime_Options__config=SimpleNamespace(user_cache_dir=tmp_path))
     tagger = QuickTag(None, "example.com", talker or Mock(name="talker"), config, Mock())
-    tagger.limit = 30
     return tagger
 
 
@@ -66,7 +65,7 @@ def test_gap_does_not_discard_later_improved_hash_match(tmp_path, distances, agg
     tagger = quick_tag(tmp_path)
     candidates = [hashes(str(i), *values) for i, values in enumerate(distances, 1)]
 
-    selected, display = tagger.match_results(candidates, aggressive_filtering)
+    selected, display = tagger.match_results(candidates, aggressive_filtering, max_results=30)
 
     assert [r.id.ID for r in selected] == ["1", "3"]
     assert [r.id.ID for r in display] == ["1", "3"]
@@ -76,7 +75,7 @@ def test_aggressive_filter_can_keep_improved_later_hash_group(tmp_path):
     tagger = quick_tag(tmp_path)
     candidates = [hashes("1", 0, 5, 9), hashes("2", 5, 9), hashes("3", 6, 0)]
 
-    selected, display = tagger.match_results(candidates, True)
+    selected, display = tagger.match_results(candidates, True, max_results=30)
 
     assert [r.id.ID for r in selected] == ["1", "3"]
     assert [r.id.ID for r in display] == ["1", "2", "3"]
@@ -95,7 +94,9 @@ def test_first_or_fallback_match_returns_id(tmp_path, first_match):
     tagger = quick_tag(tmp_path)
     first, fallback = hashes("1", 0), hashes("2", 1)
     tagger.check_matches = Mock(side_effect=[first] if first_match else [None, fallback])
-    result = tagger.display_results([first], [first, fallback], Mock(), GenericMetadata(series="Series"), False, False)
+    result = tagger.display_results(
+        [first], [first, fallback], Mock(), GenericMetadata(series="Series"), False, False, max_results=30
+    )
     assert result == (first.id if first_match else fallback.id)
     assert tagger.check_matches.call_count == (1 if first_match else 2)
 
@@ -107,12 +108,11 @@ def test_learned_bad_ids_are_not_fetched_after_reload(tmp_path):
     bad, good = hashes("bad", 0), hashes("good", 1)
     tagger = quick_tag(tmp_path, talker)
     tagger.get_mds([bad.id, good.id])
-    tagger.bad_ids.close()
     fresh = quick_tag(tmp_path, talker)
     talker.reset_mock()
     talker.name = "source"
     talker.fetch_comic_data.return_value = GenericMetadata(issue_id="good", series="Series", issue="1")
-    assert fresh.check_matches([bad, good], GenericMetadata(series="Series", issue="1")) == good
+    assert fresh.check_matches([bad, good], GenericMetadata(series="Series", issue="1"), max_results=30) == good
     talker.fetch_comic_data.assert_called_once_with(issue_id="good", on_rate_limit=None)
     talker.fetch_comics.assert_not_called()
 
@@ -125,7 +125,9 @@ def test_menu_uses_retrieved_items_for_range_and_selection(tmp_path, monkeypatch
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "2")
     ca = Mock(path=SimpleNamespace(name="comic.cbz"))
-    assert tagger.display_results([one], [one, two, missing], ca, GenericMetadata(), True, False) == two.id
+    assert (
+        tagger.display_results([one], [one, two, missing], ca, GenericMetadata(), True, False, max_results=30) == two.id
+    )
     assert "[1-2]" in prompts[0]
 
 
@@ -134,7 +136,12 @@ def test_empty_menu_returns_without_prompt(tmp_path, monkeypatch):
     tagger.check_matches = Mock(return_value=None)
     tagger.get_mds = Mock(return_value=[])
     monkeypatch.setattr("builtins.input", Mock(side_effect=AssertionError("unexpected prompt")))
-    assert tagger.display_results([hashes("1", 0)], [hashes("1", 0)], Mock(), GenericMetadata(), True, False) is None
+    assert (
+        tagger.display_results(
+            [hashes("1", 0)], [hashes("1", 0)], Mock(), GenericMetadata(), True, False, max_results=30
+        )
+        is None
+    )
 
 
 def test_bad_exact_candidate_does_not_hide_healthy_match(tmp_path):
@@ -145,12 +152,14 @@ def test_bad_exact_candidate_does_not_hide_healthy_match(tmp_path):
     bad, good = hashes("bad", 0, 0), hashes("good", 1)
     tagger.known_bad_ids[tagger.domain] = {bad.id}
 
-    selected, display = tagger.match_results([bad, good], False)
+    selected, display = tagger.match_results([bad, good], False, max_results=30)
 
     assert selected == [good]
     assert display == [good]
     assert (
-        tagger.display_results(selected, display, Mock(), GenericMetadata(series="Series", issue="1"), False, False)
+        tagger.display_results(
+            selected, display, Mock(), GenericMetadata(series="Series", issue="1"), False, False, max_results=30
+        )
         == good.id
     )
     talker.fetch_comic_data.assert_called_once_with(issue_id="good", on_rate_limit=None)
@@ -165,7 +174,9 @@ def test_display_falls_back_when_selected_candidates_become_bad(tmp_path):
     tagger.known_bad_ids[tagger.domain] = {bad.id}
 
     assert (
-        tagger.display_results([bad], [bad, good], Mock(), GenericMetadata(series="Series", issue="1"), False, False)
+        tagger.display_results(
+            [bad], [bad, good], Mock(), GenericMetadata(series="Series", issue="1"), False, False, max_results=30
+        )
         == good.id
     )
     talker.fetch_comic_data.assert_called_once_with(issue_id="good", on_rate_limit=None)
@@ -179,7 +190,12 @@ def test_missing_single_fetch_is_recorded_and_not_offered_in_menu(tmp_path, monk
     missing = hashes("missing", 0)
     monkeypatch.setattr("builtins.input", Mock(side_effect=AssertionError("unexpected prompt")))
 
-    assert tagger.display_results([missing], [missing], Mock(), GenericMetadata(series="Series"), True, False) is None
+    assert (
+        tagger.display_results(
+            [missing], [missing], Mock(), GenericMetadata(series="Series"), True, False, max_results=30
+        )
+        is None
+    )
     assert missing.id in tagger.known_bad_ids[tagger.domain]
     assert missing.id in tagger.bad_ids.get_ids()[tagger.domain]
     talker.fetch_comic_data.assert_called_once_with(issue_id="missing", on_rate_limit=None)

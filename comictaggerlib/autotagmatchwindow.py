@@ -24,10 +24,10 @@ from PyQt6 import QtCore, QtGui, QtWidgets, uic
 from comicapi.comicarchive import ComicArchive, tags
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.ctsettings import ct_ns
-from comictaggerlib.md import prepare_metadata, read_selected_tags
+from comictaggerlib.md import parse_archive_filename, prepare_metadata, read_configured_tags, write_selected_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.resulttypes import IssueResult, Result
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
 from comictalker.comictalker import ComicTalker, TalkerError
 
 logger = logging.getLogger(__name__)
@@ -87,16 +87,7 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
         self.skipButton.clicked.connect(self.skip_to_next)
 
         self.update_data()
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)
         self.finished.connect(self.comic_list_emit)
 
     def comic_list_emit(self) -> None:
@@ -187,9 +178,7 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
 
         match = self.current_match()
         assert match.md.issue_id
-        self.altCoverWidget.set_issue_details(
-            match.md.issue_id, [x.URL for x in [match.md._cover_image, *match.md._alternate_images] if x]
-        )
+        self.altCoverWidget.set_url_list([x.URL for x in [match.md._cover_image, *match.md._alternate_images] if x])
         if match.md.description is None:
             self.teDescription.setText("")
         else:
@@ -238,16 +227,10 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
     def save_match(self) -> None:
         match = self.current_match()
         ca = self.current_match_set[1]
-        md, _, error = read_selected_tags(
-            self.config.Runtime_Options__tags_read,
-            ca,
-            self.config.Metadata_Options__tag_merge,
-            self.config.Metadata_Options__tag_merge_lists,
-        )
+        md, _, error = read_configured_tags(ca, self.config.Runtime_Options__tags_read, self.config)
         if error is not None:
             logger.error("Failed to load tags for %s: %s", ca.path, error)
 
-            QtWidgets.QApplication.restoreOverrideCursor()
             OptionalMessageDialog.critical(
                 self,
                 "Read Failed!",
@@ -256,12 +239,7 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
             return
 
         if md.is_empty:
-            md = ca.metadata_from_filename(
-                self.config.Filename_Parsing__filename_parser,
-                self.config.Filename_Parsing__remove_c2c,
-                self.config.Filename_Parsing__remove_fcbd,
-                self.config.Filename_Parsing__remove_publisher,
-            )
+            md = parse_archive_filename(ca, self.config)
 
         # now get the particular issue data
 
@@ -269,7 +247,6 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
             assert match.md.issue_id
             self.current_match_set[0].md = ct_md = self.talker.fetch_comic_data(issue_id=match.md.issue_id)
         except TalkerError as e:
-            QtWidgets.QApplication.restoreOverrideCursor()
             OptionalMessageDialog.critical(self, f"{e.source} {e.code_name} Error", str(e))
             return
 
@@ -278,17 +255,16 @@ class AutoTagMatchWindow(QtWidgets.QDialog):
             return
 
         QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
-        md = prepare_metadata(md, ct_md, self.config)
-        for tag_id in self.config.Runtime_Options__tags_write:
-            success = ca.write_tags(md, tag_id)
+        try:
+            md = prepare_metadata(md, ct_md, self.config)
+            _, failed = write_selected_tags(ca, md, self.config.Runtime_Options__tags_write)
+        finally:
             QtWidgets.QApplication.restoreOverrideCursor()
-            if not success:
-                OptionalMessageDialog.warning(
-                    self,
-                    "Write Error",
-                    f"Saving {tags[tag_id].name()} the tags to the archive seemed to fail!",
-                )
-                break
-        self.matched_comics.append(ca)
 
         ca.reset_cache()
+        if failed is not None:
+            OptionalMessageDialog.warning(
+                self, "Write Error", f"Saving {tags[failed].name()} tags to the archive failed!"
+            )
+        else:
+            self.matched_comics.append(ca)

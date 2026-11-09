@@ -112,19 +112,6 @@ class PageMetadata:
             return False
         return self.archive_index == other.archive_index
 
-    def _get_clean_metadata(self, *attributes: str) -> PageMetadata:
-        return PageMetadata(
-            filename=self.filename if "filename" in attributes else "",
-            type=self.type if "type" in attributes else "",
-            bookmark=self.bookmark if "bookmark" in attributes else "",
-            display_index=self.display_index if "display_index" in attributes else 0,
-            archive_index=self.archive_index if "archive_index" in attributes else 0,
-            double_page=self.double_page if "double_page" in attributes else None,
-            byte_size=self.byte_size if "byte_size" in attributes else None,
-            height=self.height if "height" in attributes else None,
-            width=self.width if "width" in attributes else None,
-        )
-
 
 @dataclasses.dataclass
 class ComicSeries:
@@ -265,7 +252,9 @@ class GenericMetadata:
         return True
 
     @is_empty.setter
-    def is_empty(self, value: bool) -> None: ...
+    def is_empty(self, value: bool) -> None:
+        # Older plugins pass or assign is_empty; emptiness is computed from the fields.
+        pass
 
     def copy(self) -> GenericMetadata:
         return copy.deepcopy(self)
@@ -275,40 +264,6 @@ class GenericMetadata:
         tmp.__dict__.update(kwargs)
         return tmp
 
-    def _get_clean_metadata(self, *attributes: str) -> GenericMetadata:
-        new_md = GenericMetadata()
-        list_handled = []
-        for attr in sorted(attributes):
-            if "." in attr:
-                lst, _, name = attr.partition(".")
-                if lst in list_handled:
-                    continue
-                old_value = getattr(self, lst)
-                new_value = getattr(new_md, lst)
-                if old_value:
-                    if hasattr(old_value[0], "_get_clean_metadata"):
-                        list_attributes = [x.removeprefix(lst + ".") for x in attributes if x.startswith(lst)]
-                        for x in old_value:
-                            new_value.append(x._get_clean_metadata(*list_attributes))
-                        list_handled.append(lst)
-                        continue
-                    if not new_value:
-                        for x in old_value:
-                            new_value.append(x.__class__())
-                    for i, x in enumerate(old_value):
-                        if isinstance(x, dict):
-                            if name in x:
-                                new_value[i][name] = x[name]
-                        else:
-                            setattr(new_value[i], name, getattr(x, name))
-
-            else:
-                old_value = getattr(self, attr)
-                if isinstance(old_value, list):
-                    continue
-                setattr(new_md, attr, old_value)
-        return new_md
-
     def overlay(
         self, new_md: GenericMetadata, mode: merge.Mode = merge.Mode.OVERLAY, merge_lists: bool = False
     ) -> None:
@@ -316,118 +271,50 @@ class GenericMetadata:
 
         attribute_merge = merge.attribute[mode]
         list_merge = merge.lists[mode]
-
-        def assign(old: Any, new: Any, attribute_merge: Any = attribute_merge) -> Any:
+        for field in dataclasses.fields(GenericMetadata):
+            name = field.name
+            if name == "is_empty":
+                continue
+            old = getattr(self, name)
+            new = getattr(new_md, name)
+            default_factory = field.default_factory
+            is_collection = default_factory is list or default_factory is set
             if new is REMOVE:
-                return None
-
-            return attribute_merge(old, new)
-
-        def assign_list(old: list[Any] | set[Any], new: list[Any] | set[Any], list_merge: Any = list_merge) -> Any:
-            if new is REMOVE:
-                old.clear()
-                return old
-            if merge_lists:
-                return list_merge(old, new)
+                setattr(self, name, default_factory() if callable(default_factory) else field.default)
+                continue
+            if is_collection and merge_lists and name != "pages":
+                # Pages describe one archive's order and must be replaced together.
+                value = list_merge(old, new)
             else:
-                return assign(old, new)
+                value = attribute_merge(old, new)
 
-        if not new_md.is_empty:
-            self.is_empty = False
-
-        self.data_origin = assign(self.data_origin, new_md.data_origin)  # TODO use and purpose now?
-        self.issue_id = assign(self.issue_id, new_md.issue_id)
-        self.series_id = assign(self.series_id, new_md.series_id)
-
-        # This should not usually be set by a talker or other online datasource
-        self.original_hash = assign(self.original_hash, new_md.original_hash)
-
-        self.series = assign(self.series, new_md.series)
-        self.series_start_year = assign(self.series_start_year, new_md.series_start_year)
-
-        self.series_aliases = assign_list(self.series_aliases, new_md.series_aliases)
-        self.issue = assign(self.issue, new_md.issue)
-        self.issue_count = assign(self.issue_count, new_md.issue_count)
-        self.title = assign(self.title, new_md.title)
-        self.title_aliases = assign_list(self.title_aliases, new_md.title_aliases)
-        self.volume = assign(self.volume, new_md.volume)
-        self.volume_count = assign(self.volume_count, new_md.volume_count)
-        self.genres = assign_list(self.genres, new_md.genres)
-        self.description = assign(self.description, new_md.description)
-        self.notes = assign(self.notes, new_md.notes)
-
-        self.alternate_series = assign(self.alternate_series, new_md.alternate_series)
-        self.alternate_number = assign(self.alternate_number, new_md.alternate_number)
-        self.alternate_count = assign(self.alternate_count, new_md.alternate_count)
-        self.story_arcs = assign_list(self.story_arcs, new_md.story_arcs)
-        self.series_groups = assign_list(self.series_groups, new_md.series_groups)
-
-        self.gtin = assign(self.gtin, new_md.gtin)
-
-        self.publisher = assign(self.publisher, new_md.publisher)
-        self.imprint = assign(self.imprint, new_md.imprint)
-        self.day = assign(self.day, new_md.day)
-        self.month = assign(self.month, new_md.month)
-        self.year = assign(self.year, new_md.year)
-        self.language = assign(self.language, new_md.language)
-        self.country = assign(self.country, new_md.country)
-        self.web_links = assign_list(self.web_links, new_md.web_links)
-        self.format = assign(self.format, new_md.format)
-        self.manga = assign(self.manga, new_md.manga)
-        self.black_and_white = assign(self.black_and_white, new_md.black_and_white)
-        self.maturity_rating = assign(self.maturity_rating, new_md.maturity_rating)
-        self.critical_rating = assign(self.critical_rating, new_md.critical_rating)
-        self.scan_info = assign(self.scan_info, new_md.scan_info)
-
-        self.tags = assign_list(self.tags, new_md.tags)
-
-        self.characters = assign_list(self.characters, new_md.characters)
-        self.teams = assign_list(self.teams, new_md.teams)
-        self.locations = assign_list(self.locations, new_md.locations)
-
-        # credits are added through add_credit so that some standard checks are observed
-        # which means that we needs self.credits to be empty
-        tmp_credits = self.credits
-        self.credits = []
-        for c in assign_list(tmp_credits, new_md.credits):
-            self.add_credit(c)
-
-        self.price = assign(self.price, new_md.price)
-        self.is_version_of = assign(self.is_version_of, new_md.is_version_of)
-        self.rights = assign(self.rights, new_md.rights)
-        self.identifier = assign(self.identifier, new_md.identifier)
-        self.last_mark = assign(self.last_mark, new_md.last_mark)
-        self._cover_image = assign(self._cover_image, new_md._cover_image)
-        self._alternate_images = assign_list(self._alternate_images, new_md._alternate_images)
-
-        # pages doesn't get merged, if we did merge we would end up with duplicate pages
-        self.pages = assign(self.pages, new_md.pages)
-        self.page_count = assign(self.page_count, new_md.page_count)
+            if name == "credits":
+                self.credits = []
+                for credit in value:
+                    self.add_credit(copy.copy(credit))
+            elif value is not old:
+                setattr(self, name, copy.deepcopy(value) if is_collection else value)
 
     def apply_default_page_list(self, page_list: Sequence[str]) -> None:
         """apply a default page list, with the first page marked as the cover"""
 
-        # Create a dictionary in the weird case that the metadata doesn't match the archive
-        pages = {p.archive_index: p for p in self.pages}
+        pages = {page.archive_index: page for page in self.pages}
         cover_set = False
-
-        # It might be a good idea to validate that each page in `pages` is found in page_list
-        for i, filename in enumerate(page_list):
-            page = pages.get(i, PageMetadata(archive_index=i, display_index=i, filename="", type="", bookmark=""))
-            page.filename = filename
-            pages[i] = page
-
-            # Check if we know what the cover is
+        for index, filename in enumerate(page_list):
+            page = pages.get(index)
+            if page is None:
+                page = PageMetadata(archive_index=index, display_index=index, filename=filename, type="", bookmark="")
+                pages[index] = page
+            else:
+                page.filename = filename
             cover_set = page.type == PageType.FrontCover or cover_set
-        self.pages = sorted(pages.values())
 
+        self.pages = sorted(pages.values())
         self.page_count = len(self.pages)
         if self.page_count != len(page_list):
-            logger.warning("Wrong count of pages: expected %d got %d", len(self.pages), len(page_list))
-        # Set the cover to the first image acording to hte display index if we don't know what the cover is
-        if not cover_set:
-            first_page = self.get_archive_page_index(0)
-            self.pages[first_page].type = PageType.FrontCover
+            logger.warning("Wrong count of pages: expected %d got %d", len(page_list), self.page_count)
+        if self.pages and not cover_set:
+            min(self.pages, key=lambda page: page.display_index).type = PageType.FrontCover
 
     def get_archive_page_index(self, pagenum: int) -> int:
         """convert the displayed page number to the page index of the file in the archive"""
@@ -475,17 +362,11 @@ class GenericMetadata:
         person = norm_fold(credit.person)
         role = norm_fold(credit.role)
 
-        # look to see if it's not already there...
-        found = False
-        for c in self.credits:
-            if norm_fold(c.person) == person and norm_fold(c.role) == role:
-                # no need to add it. just adjust the "primary" flag as needed
-                c.primary = c.primary or primary
-                found = True
-                break
-
-        if not found:
-            self.credits.append(credit)
+        for existing in self.credits:
+            if norm_fold(existing.person) == person and norm_fold(existing.role) == role:
+                existing.primary = existing.primary or credit.primary
+                return
+        self.credits.append(credit)
 
     def get_primary_credit(self, role: str) -> Credit | None:
         primary = None
@@ -592,310 +473,6 @@ class GenericMetadata:
             self.imprint = imprint
         elif self.imprint.casefold() in imprint.casefold():
             self.imprint = imprint
-
-
-md_test: GenericMetadata = GenericMetadata(
-    is_empty=False,
-    data_origin=MetadataOrigin("comicvine", "Comic Vine"),
-    series="Cory Doctorow's Futuristic Tales of the Here and Now",
-    series_id="23437",
-    issue="1",
-    issue_id="140529",
-    title="Anda's Game",
-    publisher="IDW Publishing",
-    month=10,
-    year=2007,
-    day=1,
-    issue_count=6,
-    volume=1,
-    genres={"Sci-Fi"},
-    language="en",
-    description=(
-        "For 12-year-old Anda, getting paid real money to kill the characters of players who were cheating"
-        " in her favorite online computer game was a win-win situation. Until she found out who was paying her,"
-        " and what those characters meant to the livelihood of children around the world."
-    ),
-    volume_count=None,
-    critical_rating=3.0,
-    country=None,
-    alternate_series="Tales",
-    alternate_number="2",
-    alternate_count=7,
-    gtin=None,
-    imprint="craphound.com",
-    notes="Tagged with ComicTagger 1.3.2a5 using info from Comic Vine on 2022-04-16 15:52:26. [Issue ID 140529]",
-    web_links=[
-        parse_url("https://comicvine.gamespot.com/cory-doctorows-futuristic-tales-of-the-here-and-no/4000-140529/")
-    ],
-    format="Series",
-    manga="No",
-    black_and_white=None,
-    page_count=24,
-    maturity_rating="Everyone 10+",
-    story_arcs=["Here and Now"],
-    series_groups=["Futuristic Tales"],
-    scan_info="(CC BY-NC-SA 3.0)",
-    characters={"Anda"},
-    teams={"Fahrenheit"},
-    locations=set(utils.split("lonely  cottage ", ",")),
-    credits=[
-        Credit(primary=False, person="Dara Naraghi", role="Writer"),
-        Credit(primary=False, person="Esteve Polls", role="Penciller"),
-        Credit(primary=False, person="Esteve Polls", role="Inker"),
-        Credit(primary=False, person="Neil Uyetake", role="Letterer"),
-        Credit(primary=False, person="Sam Kieth", role="Cover"),
-        Credit(primary=False, person="Ted Adams", role="Editor"),
-    ],
-    tags=set(),
-    pages=[
-        PageMetadata(
-            archive_index=0,
-            display_index=0,
-            height=1280,
-            byte_size=195977,
-            width=800,
-            type=PageType.FrontCover,
-            filename="!cover.jpg",
-            bookmark="",
-        ),
-        PageMetadata(
-            archive_index=1,
-            display_index=1,
-            height=2039,
-            byte_size=611993,
-            width=1327,
-            filename="01.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=2,
-            display_index=2,
-            height=2039,
-            byte_size=783726,
-            width=1327,
-            filename="02.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=3,
-            display_index=3,
-            height=2039,
-            byte_size=679584,
-            width=1327,
-            filename="03.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=4,
-            display_index=4,
-            height=2039,
-            byte_size=788179,
-            width=1327,
-            filename="04.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=5,
-            display_index=5,
-            height=2039,
-            byte_size=864433,
-            width=1327,
-            filename="05.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=6,
-            display_index=6,
-            height=2039,
-            byte_size=765606,
-            width=1327,
-            filename="06.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=7,
-            display_index=7,
-            height=2039,
-            byte_size=876427,
-            width=1327,
-            filename="07.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=8,
-            display_index=8,
-            height=2039,
-            byte_size=852622,
-            width=1327,
-            filename="08.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=9,
-            display_index=9,
-            height=2039,
-            byte_size=800205,
-            width=1327,
-            filename="09.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=10,
-            display_index=10,
-            height=2039,
-            byte_size=746243,
-            width=1326,
-            filename="10.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=11,
-            display_index=11,
-            height=2039,
-            byte_size=718062,
-            width=1327,
-            filename="11.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=12,
-            display_index=12,
-            height=2039,
-            byte_size=532179,
-            width=1326,
-            filename="12.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=13,
-            display_index=13,
-            height=2039,
-            byte_size=686708,
-            width=1327,
-            filename="13.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=14,
-            display_index=14,
-            height=2039,
-            byte_size=641907,
-            width=1327,
-            filename="14.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=15,
-            display_index=15,
-            height=2039,
-            byte_size=805388,
-            width=1327,
-            filename="15.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=16,
-            display_index=16,
-            height=2039,
-            byte_size=668927,
-            width=1326,
-            filename="16.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=17,
-            display_index=17,
-            height=2039,
-            byte_size=710605,
-            width=1327,
-            filename="17.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=18,
-            display_index=18,
-            height=2039,
-            byte_size=761398,
-            width=1326,
-            filename="18.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=19,
-            display_index=19,
-            height=2039,
-            byte_size=743807,
-            width=1327,
-            filename="19.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=20,
-            display_index=20,
-            height=2039,
-            byte_size=552911,
-            width=1326,
-            filename="20.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=21,
-            display_index=21,
-            height=2039,
-            byte_size=556827,
-            width=1327,
-            filename="21.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            archive_index=22,
-            display_index=22,
-            height=2039,
-            byte_size=675078,
-            width=1326,
-            filename="22.jpg",
-            bookmark="",
-            type="",
-        ),
-        PageMetadata(
-            bookmark="Interview",
-            archive_index=23,
-            display_index=23,
-            height=2032,
-            byte_size=800965,
-            width=1338,
-            type=PageType.Letters,
-            filename="23.jpg",
-        ),
-    ],
-    price=None,
-    is_version_of=None,
-    rights=None,
-    identifier=None,
-    last_mark=None,
-    _cover_image=None,
-)
 
 
 __all__ = (

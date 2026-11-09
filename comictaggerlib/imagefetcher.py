@@ -22,186 +22,91 @@ import io
 import logging
 import os
 import pathlib
-import shutil
 import sqlite3
 import tempfile
-from collections.abc import Callable
-from typing import TYPE_CHECKING
 
-import PIL
+import requests
 from PIL import Image
-
-try:
-    import niquests as requests
-except ImportError:
-    import requests
 
 from comictaggerlib import ctversion
 
-if TYPE_CHECKING:
-    from PyQt6 import QtCore, QtNetwork
-
 logger = logging.getLogger(__name__)
+USER_AGENT = "comictagger image fetcher/" + ctversion.version
 
 
 class ImageFetcherException(Exception): ...
 
 
 class ImageFetcher:
-    image_fetch_complete: Callable[[str, bytes | QtCore.QByteArray], None] | None = None
-    qt_available = True
-
     def __init__(self, cache_folder: pathlib.Path) -> None:
         self.db_file = cache_folder / "image_url_cache.db"
         self.cache_folder = cache_folder / "image_cache"
-
-        if self.qt_available:
-            try:
-                from PyQt6 import QtNetwork
-
-                self.qt_available = True
-            except ImportError:
-                self.qt_available = False
-        if not self.db_file.exists():
-            self.create_image_db()
         self.cache_folder.mkdir(parents=True, exist_ok=True)
+        with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+            con.execute("CREATE TABLE IF NOT EXISTS Images(url TEXT,filename TEXT,timestamp TEXT,PRIMARY KEY (url))")
 
-        if self.qt_available:
-            self.nam = QtNetwork.QNetworkAccessManager()
-            self.nam.finished.connect(self.finish_request)
-
-    def clear_cache(self) -> None:
-        os.unlink(self.db_file)
-        if os.path.isdir(self.cache_folder):
-            shutil.rmtree(self.cache_folder)
-        self.cache_folder.mkdir(parents=True, exist_ok=True)
-
-    def fetch(self, url: str, blocking: bool = False) -> bytes:
-        """
-        If called with blocking=True, this will block until the image is
-        fetched.
-        If called with blocking=False, this will run the fetch in the
-        background, and emit a signal when done
-        """
-
-        # first look in the DB
-        image_data = self.get_image_from_cache(url)
+    def fetch(self, url: str) -> bytes:
+        if cached := self.get_image_from_cache(url):
+            return cached
         try:
-            if image_data:
-                i = Image.open(io.BytesIO(image_data))
-                i.verify()
-        except PIL.UnidentifiedImageError:
-            logger.error("Unable to identify cached image from %s", url)
-            image_data = b""
-        except Exception:
-            logger.exception("Unknown exception validating cached image from: %s", url)
-            image_data = b""
+            response = requests.get(url, headers={"user-agent": USER_AGENT}, timeout=60)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            raise ImageFetcherException(f"Could not fetch {url}") from e
+        return self.add_image_to_cache(url, response.content)
 
-        # Async for retrieving covers seems to work well
-        if blocking or not self.qt_available:
-            if not image_data:
-                try:
-                    response = requests.get(
-                        url, headers={"user-agent": "comictagger image fetcher/" + ctversion.version}, timeout=60
-                    )
-                    response.raise_for_status()
-                    image_data = response.content
-
-                    i = Image.open(io.BytesIO(image_data))
-                    i.verify()
-                    # save the image to the cache
-                    self.add_image_to_cache(url, image_data)
-                except PIL.UnidentifiedImageError:
-                    logger.error("Unable to identify image from %s", url)
-                    image_data = b""
-                except requests.RequestException as e:
-                    logger.exception("Fetching url failed: %s", e)
-                    raise ImageFetcherException("Network Error!") from e
-                except Exception:
-                    logger.exception("Unknown exception validating image from: %s", url)
-                    image_data = b""
-            return image_data
-
-        if self.qt_available:
-            from PyQt6 import QtCore, QtNetwork
-
-            # if we found it, just emit the signal asap
-            if image_data:
-                if self.image_fetch_complete is not None:
-                    self.image_fetch_complete(url, QtCore.QByteArray(image_data))
-                return b""
-
-            # didn't find it.  look online
-            qnet = QtNetwork.QNetworkRequest(QtCore.QUrl(url))
-            qnet.setHeader(qnet.KnownHeaders.UserAgentHeader, "comictagger image fetcher/" + ctversion.version)
-            self.nam.get(qnet)
-
-            # we'll get called back when done...
+    @staticmethod
+    def _verify_image(url: str, data: bytes) -> bytes:
+        if data:
+            try:
+                with Image.open(io.BytesIO(data)) as image:
+                    image.verify()
+                return data
+            except Exception:
+                logger.warning("Invalid cover image from %s", url, exc_info=True)
         return b""
 
-    def finish_request(self, reply: QtNetwork.QNetworkReply) -> None:
-        from PyQt6 import QtNetwork
+    def add_image_to_cache(self, url: str, image_data: bytes) -> bytes:
+        if not (image_data := self._verify_image(url, image_data)):
+            return b""
 
-        # read in the image data
-        url = reply.request().url().toString()
-        length = reply.header(QtNetwork.QNetworkRequest.KnownHeaders.ContentLengthHeader)
-        logger.debug("request finished: %s: %s", url, length or "")
-        image_data = reply.readAll().data()
-
-        # save the image to the cache
+        filename: str | None = None
         try:
-            i = Image.open(io.BytesIO(image_data))
-            i.verify()
-            self.add_image_to_cache(url, image_data)
+            fd, filename = tempfile.mkstemp(dir=self.cache_folder, prefix="img")
+            with os.fdopen(fd, "wb") as image_file:
+                image_file.write(image_data)
+            with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+                con.execute("BEGIN IMMEDIATE")
+                prior = con.execute("SELECT filename FROM Images WHERE url=?", (url,)).fetchone()
+                con.execute(
+                    "INSERT OR REPLACE INTO Images VALUES (?, ?, ?)",
+                    (url, filename, datetime.datetime.now().isoformat()),
+                )
+        except (OSError, sqlite3.Error):
+            logger.warning("Could not cache cover image from %s", url, exc_info=True)
+            if filename is not None:
+                self._remove_cache_file(filename)
+        else:
+            if prior is not None:
+                self._remove_cache_file(prior[0])
+        return image_data
 
-            if self.image_fetch_complete is not None:
-                self.image_fetch_complete(url, image_data)
-        except PIL.UnidentifiedImageError:
-            logger.error("Unable to identify image from %s", url)
-        except Exception:
-            logger.exception("Unknown exception validating image from: %s", url)
-
-    def create_image_db(self) -> None:
-        # this will wipe out any existing version
-        open(self.db_file, "wb").close()
-
-        # wipe any existing image cache folder too
-        if os.path.isdir(self.cache_folder):
-            shutil.rmtree(self.cache_folder)
-        self.cache_folder.mkdir(parents=True, exist_ok=True)
-
-        # create tables
-        con = sqlite3.connect(self.db_file)
-        with contextlib.closing(con), con, contextlib.closing(con.cursor()) as cur:
-            cur.execute("CREATE TABLE Images(url TEXT,filename TEXT,timestamp TEXT,PRIMARY KEY (url))")
-
-    def add_image_to_cache(self, url: str, image_data: bytes) -> None:
-        con = sqlite3.connect(self.db_file)
-        with contextlib.closing(con), con, contextlib.closing(con.cursor()) as cur:
-            timestamp = datetime.datetime.now().isoformat()
-
-            tmp_fd, filename = tempfile.mkstemp(dir=self.cache_folder, prefix="img")
-            with os.fdopen(tmp_fd, "w+b") as f:
-                f.write(image_data)
-
-            cur.execute("INSERT or REPLACE INTO Images VALUES(?, ?, ?)", (url, filename, timestamp))
+    def _remove_cache_file(self, filename: str) -> None:
+        path = pathlib.Path(filename)
+        if path.parent.absolute() == self.cache_folder.absolute() and path.name.startswith("img"):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove cached image %s", path, exc_info=True)
 
     def get_image_from_cache(self, url: str) -> bytes:
-        con = sqlite3.connect(self.db_file)
-        with contextlib.closing(con), con, contextlib.closing(con.cursor()) as cur:
-            cur.execute("SELECT filename FROM Images WHERE url=?", [url])
-            row = cur.fetchone()
-
-            if row is None:
-                return b""
-
-            filename = row[0]
-            image_data = b""
-
-            try:
-                with open(filename, "rb") as f:
-                    image_data = f.read()
-            except OSError:
-                pass
-
-            return image_data
+        try:
+            with contextlib.closing(sqlite3.connect(self.db_file)) as con:
+                row = con.execute("SELECT filename FROM Images WHERE url=?", (url,)).fetchone()
+            if row is not None:
+                return self._verify_image(url, pathlib.Path(row[0]).read_bytes())
+        except FileNotFoundError:
+            pass
+        except (OSError, sqlite3.Error):
+            logger.warning("Could not read cached cover image from %s", url, exc_info=True)
+        return b""

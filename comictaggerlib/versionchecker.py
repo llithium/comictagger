@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import logging
 
-try:
-    import niquests as requests
-except ImportError:
-    import requests
+import requests
 
 from comictaggerlib import ctversion
 

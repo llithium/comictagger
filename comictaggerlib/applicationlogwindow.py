@@ -5,7 +5,7 @@ import pathlib
 
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
 
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
 
 
 class QTextEditLogger(QtCore.QObject, logging.Handler):
@@ -38,13 +38,4 @@ class ApplicationLogWindow(QtWidgets.QDialog):
         self.log_folder = log_folder
         self.lblLogLocation.setText(f'Log Location: <a href="file://{log_folder}">{log_folder}</a>')
         self.textEdit.setTabStopDistance(self.textEdit.tabStopDistance() * 2)
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import logging
-import os
 import pathlib
-import shutil
-import tempfile
 import zipfile
 from collections.abc import Callable, Collection, Iterator
 from contextlib import ExitStack, contextmanager
-from typing import cast
 
 import chardet
 from zipremove import ZipFile
 
-from comicapi.archivers.archiver import Archiver, read_archive
+from comicapi.archivers.archiver import Archiver, archive_replacement, read_archive
 
 logger = logging.getLogger(__name__)
 
@@ -120,50 +116,34 @@ class ZipArchiver(Archiver):
         return True
 
     def rebuild(self, exclude_list: list[str]) -> bool:
-        """Zip helper func
-
-        This recompresses the zip archive, without the files in the exclude_list
-        """
+        """Rewrite the archive without the named members."""
         self._filename_list = []
         try:
-            with ZipFile(
-                tempfile.NamedTemporaryFile(dir=os.path.dirname(self.path), delete=False), "w", allowZip64=True
-            ) as zout:
-                with ZipFile(self.path, mode="r") as zin:
+            with archive_replacement(self.path) as staged:
+                with ZipFile(self.path, mode="r") as zin, ZipFile(staged, "w", allowZip64=True) as zout:
                     for item in zin.infolist():
-                        buffer = zin.read(item.filename)
                         if item.filename not in exclude_list:
-                            zout.writestr(item, buffer)
-
-                    # preserve the old comment
+                            zout.writestr(item, zin.read(item.filename))
                     zout.comment = zin.comment
-
-                # replace with the new file
-                self.path.unlink(missing_ok=True)
-                zout.close()  # Required on windows
-
-                shutil.move(cast(str, zout.filename), self.path)
 
         except (zipfile.BadZipfile, OSError) as e:
             logger.error("Error rebuilding zip file [%s]: %s", e, self.path)
             return False
         return True
 
-    def copy_from_archive(self, other_archive: Archiver) -> bool:
+    def copy_from_archive(self, other_archive: Archiver, *, overwrite: bool = True) -> bool:
         """Replace the current zip with one copied from another archive"""
         self._filename_list = []
         try:
-            with ZipFile(self.path, mode="w", allowZip64=True) as zout, read_archive(other_archive) as read:
-                for filename in other_archive.get_filename_list():
-                    data = read(filename)
-                    if data is not None:
-                        zout.writestr(filename, data)
-
-            # preserve the old comment
-            comment = other_archive.get_comment()
-            if comment is not None:
-                if not self.set_comment(comment):
-                    return False
+            with archive_replacement(self.path, overwrite=overwrite) as staged:
+                with ZipFile(staged, mode="w", allowZip64=True) as zout, read_archive(other_archive) as read:
+                    for filename in other_archive.get_filename_list():
+                        data = read(filename)
+                        if data is not None:
+                            zout.writestr(filename, data)
+                    comment = other_archive.get_comment()
+                    if comment is not None:
+                        zout.comment = comment.encode("utf-8")
         except Exception as e:
             logger.error("Error while copying to zip archive [%s]: from %s to %s", e, other_archive.path, self.path)
             return False

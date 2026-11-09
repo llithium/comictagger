@@ -19,10 +19,10 @@ from __future__ import annotations
 import logging
 import traceback
 
-from PyQt6 import QtCore, QtGui, QtWidgets, uic
+from PyQt6 import QtCore, QtWidgets, uic
 
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ui import qtutils, ui_path
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +41,7 @@ class LogWindow(QtWidgets.QDialog):
                 | QtCore.Qt.WindowType.WindowMaximizeButtonHint
             )
         )
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)
 
     def set_text(self, text: str | bytes | None) -> None:
         try:
