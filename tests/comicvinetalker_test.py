@@ -9,6 +9,7 @@ import comicapi.genericmetadata
 import testing.comicvine
 from comictalker.comiccacher import Issue, Series
 from comictalker.comictalker import TalkerDataError
+from comictalker.talkers.comicvine import ComicVineTalker
 
 
 def test_search_reports_a_malformed_response_as_a_talker_error(comicvine_api, monkeypatch):
@@ -110,6 +111,17 @@ def test_fetch_series(comicvine_api, comic_cache):
     assert result == testing.comicvine.comic_series_result
     assert json.loads(cache_series.data)["id"] == 23437
     assert comicvine_api.fetch_series(23437) == result
+
+
+def test_interleaved_versions_do_not_reset_the_cache_on_each_lookup(comicvine_api, cv_requests_get):
+    other = ComicVineTalker(comicvine_api.version + ".next", comicvine_api.cache_folder)
+    assert comicvine_api.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert other.fetch_series(23437) == testing.comicvine.comic_series_result
+    calls_after_both_opened = cv_requests_get.call_count
+
+    assert comicvine_api.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert other.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert cv_requests_get.call_count == calls_after_both_opened
 
 
 def test_fetch_issues_in_series(comicvine_api, comic_cache):

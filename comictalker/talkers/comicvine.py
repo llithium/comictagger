@@ -24,6 +24,7 @@ import pathlib
 import re
 import time
 from collections.abc import Callable
+from functools import cached_property
 from typing import Any, Generic, TypeVar
 from urllib.parse import parse_qsl, urlencode, urljoin
 
@@ -256,8 +257,13 @@ class ComicVineTalker(ComicTalker):
         finally:
             self._log_total_requests()
 
-    def cacher(self) -> ComicCacher:
+    @cached_property
+    def _cache(self) -> ComicCacher:
+        # Version checks can replace the database, so run setup once per talker.
         return ComicCacher(self.cache_folder, self.version)
+
+    def cacher(self) -> ComicCacher:
+        return self._cache
 
     def search_for_series(
         self,
