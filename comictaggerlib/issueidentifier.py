@@ -101,9 +101,6 @@ class IssueIdentifier:
         # closest neighbor
         self.min_score_distance = 4
 
-        # a very strong hamming score, almost certainly the same image
-        self.strong_score_thresh = 8
-
         # used to eliminate series names that are too long based on our search
         # string
         self.series_match_thresh = config.series_match_identify_thresh
@@ -303,7 +300,7 @@ class IssueIdentifier:
                     best = Score(
                         score=distance, url=url, remote_hash=cover_hash, local_hash=local_hash, local_hash_name=name
                     )
-                if distance <= self.strong_score_thresh:
+                if distance == 0:
                     return best
         return best
 

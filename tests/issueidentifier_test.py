@@ -260,6 +260,30 @@ def test_matching_respects_candidate_hash_kind(identifier, cbz, monkeypatch):
     assert matches[0].distance == 0
 
 
+@pytest.mark.parametrize("remote_first", [True, False], ids=["download-first", "hash-first"])
+def test_alternate_cover_order_preserves_exact_match_and_keeps_close_candidates(
+    identifier, cbz, monkeypatch, remote_first
+):
+    primary = comicapi.genericmetadata.ImageHash(Hash=(1 << 64) - 1, Kind="ahash", URL="")
+    best_series, best_issue = candidate("exact", primary)
+    close_series, close_issue = candidate("close", primary)
+    remote_url = "https://example.com/alternate.png"
+    downloaded = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL=remote_url)
+    exact = comicapi.genericmetadata.ImageHash(Hash=0, Kind="ahash", URL="")
+    best_issue._alternate_images = [downloaded, exact] if remote_first else [exact, downloaded]
+    close_issue._alternate_images = [comicapi.genericmetadata.ImageHash(Hash=0b111, Kind="ahash", URL="")]
+    monkeypatch.setattr(
+        identifier, "_search_for_issues", lambda terms: [(best_series, best_issue), (close_series, close_issue)]
+    )
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", Mock(return_value=b"downloaded"))
+    monkeypatch.setattr(identifier, "calculate_hash", lambda data=b"", **kwargs: 0xFF if data else 0)
+
+    result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+
+    assert result == comictaggerlib.issueidentifier.Result.multiple_good_matches
+    assert [(match.md.issue_id, match.distance) for match in matches] == [("exact", 0), ("close", 3)]
+
+
 def test_identification_reuses_remote_hashes_only_within_the_run(identifier, cbz, monkeypatch):
     fetch = Mock(return_value=cbz.get_page(0))
     monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fetch)
