@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import pathlib
 import shutil
@@ -118,6 +119,22 @@ def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path,
     assert not archive.export_as_zip(destination, overwrite=False)
     assert destination.read_bytes() == b"another export"
     assert set(tmp_path.iterdir()) == {source, destination}
+
+
+def test_zip_export_leaves_no_output_if_exclusive_publication_is_unsupported(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    archive = comicapi.comicarchive.ComicArchive(FolderArchiver.open(source))
+    destination = tmp_path / "export.cbz"
+
+    def unsupported_link(*args):
+        raise OSError(errno.EOPNOTSUPP, "hard links are not supported")
+
+    monkeypatch.setattr(os, "link", unsupported_link)
+
+    assert not archive.export_as_zip(destination, overwrite=False)
+    assert set(tmp_path.iterdir()) == {source}
 
 
 def test_write_cr(tmp_comic):

@@ -285,6 +285,31 @@ def test_cover_network_failure_is_reported_at_identification_boundary(identifier
     )
 
 
+@pytest.mark.parametrize("cancel_during_download", [False, True])
+def test_alternate_cover_download_failure_preserves_primary_match(identifier, cbz, monkeypatch, cancel_during_download):
+    alternate_url = "https://example.com/alternate.png"
+    series, issue = candidate("primary", comicapi.genericmetadata.ImageHash(Hash=(1 << 64) - 1, Kind="ahash", URL=""))
+    issue._alternate_images = [comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL=alternate_url)]
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: [(series, issue)])
+    monkeypatch.setattr(identifier, "calculate_hash", lambda **kwargs: 0)
+
+    def fail_download(fetcher, url):
+        assert url == alternate_url
+        identifier.cancel = cancel_during_download
+        raise comictaggerlib.issueidentifier.ImageFetcherException("no connection")
+
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fail_download)
+    metadata = cbz.read_tags("cr")
+
+    if cancel_during_download:
+        with pytest.raises(comictaggerlib.issueidentifier.IssueIdentifierCancelled):
+            identifier.identify(cbz, metadata)
+    else:
+        result, matches = identifier.identify(cbz, metadata)
+        assert result == comictaggerlib.issueidentifier.Result.single_bad_cover_score
+        assert [match.md.issue_id for match in matches] == ["primary"]
+
+
 def test_cancellation_after_cover_download_propagates(identifier, cbz, monkeypatch):
     monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", Mock(return_value=cbz.get_page(0)))
     cover = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL="https://example.com/cover.png")

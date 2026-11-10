@@ -607,7 +607,8 @@ class IssueIdentifier:
                 try:
                     data = fetcher.fetch(url)
                 except ImageFetcherException as e:
-                    self.log_msg(f"Network issue while fetching cover image from {self.talker.name}. Aborting...")
+                    self._user_canceled()
+                    self.log_msg(f"Network issue while fetching cover image from {self.talker.name}.")
                     raise IssueIdentifierNetworkError from e
                 self._user_canceled(functools.partial(self.progress_callback, progress, len(issues), data))
                 self._user_canceled()
@@ -623,14 +624,18 @@ class IssueIdentifier:
         if matches[0].distance >= self.min_score_thresh:
             self.log_msg("Very weak scores for the cover. Analyzing alternate pages and covers...")
             images.extend(extra_images())
-            alternate_matches = [
-                match
-                for match in self._match_covers(issues, local_hashes, remote_hash, use_alternates=True)
-                if match.distance < self.min_alternate_score_thresh
-            ]
-            if alternate_matches:
-                matches = alternate_matches
-                self.log_msg(f"Success in secondary/alternate cover matching! Best score: {matches[0].distance}")
+            try:
+                alternate_matches = [
+                    match
+                    for match in self._match_covers(issues, local_hashes, remote_hash, use_alternates=True)
+                    if match.distance < self.min_alternate_score_thresh
+                ]
+            except IssueIdentifierNetworkError:
+                self.log_msg("Alternate cover lookup failed. Keeping the primary matches.")
+            else:
+                if alternate_matches:
+                    matches = alternate_matches
+                    self.log_msg(f"Success in secondary/alternate cover matching! Best score: {matches[0].distance}")
 
         best_score = matches[0].distance
         closest = [match for match in matches if match.distance <= best_score + self.min_score_distance]

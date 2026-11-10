@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import errno
 import os
 import pathlib
-import shutil
 import tempfile
 from collections.abc import Callable, Collection, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -189,17 +187,5 @@ def archive_replacement(path: pathlib.Path, *, overwrite: bool = True) -> Iterat
         if overwrite:
             staged.replace(path)
         else:
-            try:
-                os.link(staged, path)
-            except OSError as exc:
-                if exc.errno not in (errno.EOPNOTSUPP, errno.ENOTSUP, errno.EPERM, errno.ENOSYS):
-                    raise
-                # Filesystems such as exFAT do not support hard links.
-                with staged.open("rb") as source, path.open("xb") as destination:
-                    try:
-                        shutil.copyfileobj(source, destination)
-                        destination.flush()
-                    except OSError:
-                        destination.close()
-                        path.unlink(missing_ok=True)
-                        raise
+            # Publishing with a hard link keeps the final name absent until the archive is complete.
+            os.link(staged, path)
