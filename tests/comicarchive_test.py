@@ -5,6 +5,7 @@ import os
 import pathlib
 import shutil
 import stat
+import subprocess
 import sys
 import zipfile
 from importlib.metadata import entry_points
@@ -132,6 +133,54 @@ def test_seven_zip_rewrite_preserves_private_mode(tmp_path, remove):
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert archive.read_file("001.jpg") == b"page"
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not (comicapi.archivers.rar.rar_support and shutil.which("rar")),
+    reason="requires POSIX permissions and the RAR executable",
+)
+def test_rar_replacement_preserves_private_mode(tmp_path):
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    page = source_path / "001.jpg"
+    page.write_bytes(b"old page")
+    source = FolderArchiver.open(source_path)
+    destination = tmp_path / "private.cbr"
+    archive = comicapi.archivers.rar.RarArchiver.open(destination)
+    assert archive.copy_from_archive(source)
+    destination.chmod(0o600)
+    page.write_bytes(b"new page")
+
+    old_umask = os.umask(0o022)
+    try:
+        assert archive.copy_from_archive(source)
+    finally:
+        os.umask(old_umask)
+
+    assert archive.read_file("001.jpg") == b"new page"
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+
+
+def test_failed_rar_replacement_keeps_the_original_archive(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    destination = tmp_path / "original.rar"
+    destination.write_bytes(b"original archive")
+    archive = comicapi.archivers.rar.RarArchiver.open(destination)
+
+    def fail_rar(command, *, check=False, **kwargs):
+        pathlib.Path(command[-2]).write_bytes(b"partial archive")
+        result = subprocess.CompletedProcess(command, 1, stderr="RAR failed")
+        if check:
+            result.check_returncode()
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fail_rar)
+
+    assert not archive.copy_from_archive(FolderArchiver.open(source))
+    assert destination.read_bytes() == b"original archive"
+    assert set(tmp_path.iterdir()) == {source, destination}
 
 
 def unsupported_publication(*args):

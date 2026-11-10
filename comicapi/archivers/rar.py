@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-from comicapi.archivers.archiver import Archiver, member_destination, read_archive
+from comicapi.archivers.archiver import Archiver, archive_replacement, member_destination, read_archive
 
 try:
     import rarfile
@@ -226,38 +226,33 @@ class RarArchiver(Archiver):
         """Replace the current archive with one copied from another archive"""
         self._reset()
         try:
-            with tempfile.TemporaryDirectory(dir=self.path.parent) as tmp_dir:
-                tmp_path = pathlib.Path(tmp_dir)
-                rar_cwd = tmp_path / "rar"
-                rar_cwd.mkdir(exist_ok=True)
-                rar_path = (tmp_path / self.path.name).with_suffix(".rar")
-                working_dir = os.path.dirname(os.path.abspath(self.path))
-
-                with read_archive(other_archive) as read:
-                    for filename in other_archive.get_filename_list():
-                        data = read(filename)
-                        if data is not None:
-                            member = member_destination(rar_cwd, filename)
-                            member.parent.mkdir(exist_ok=True, parents=True)
-                            member.write_bytes(data)
-                result = subprocess.run(
-                    [self.exe, "a", f"-w{working_dir}", "-r", "-c-", str(rar_path.absolute()), "."],
-                    cwd=rar_cwd.absolute(),
-                    startupinfo=STARTUPINFO,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    encoding="utf-8",
-                )
-                if result.returncode != 0:
-                    logger.error(
-                        "Error while copying to rar archive [exitcode: %d]: %s: %s",
-                        result.returncode,
-                        self.path,
-                        result.stderr,
+            with archive_replacement(self.path) as replacement:
+                # Give RAR an explicit extension even when the destination has none.
+                rar_path = replacement.staged.with_suffix(".rar")
+                working_dir = self.path.absolute().parent
+                with tempfile.TemporaryDirectory(dir=rar_path.parent) as directory:
+                    rar_cwd = pathlib.Path(directory)
+                    with read_archive(other_archive) as read:
+                        for filename in other_archive.get_filename_list():
+                            data = read(filename)
+                            if data is not None:
+                                member = member_destination(rar_cwd, filename)
+                                member.parent.mkdir(exist_ok=True, parents=True)
+                                member.write_bytes(data)
+                    subprocess.run(
+                        [self.exe, "a", f"-w{working_dir}", "-r", "-c-", str(rar_path.absolute()), "."],
+                        cwd=rar_cwd.absolute(),
+                        startupinfo=STARTUPINFO,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        encoding="utf-8",
+                        check=True,
                     )
-                    return False
-
-                rar_path.replace(self.path)
+                if rar_path != replacement.staged:
+                    rar_path.rename(replacement.staged)
+        except subprocess.CalledProcessError as e:
+            logger.error("Error while copying to rar archive [exitcode: %d]: %s: %s", e.returncode, self.path, e.stderr)
+            return False
         except Exception as e:
             logger.exception("Error while copying to rar archive [%s]: from %s to %s", e, other_archive.path, self.path)
             return False
