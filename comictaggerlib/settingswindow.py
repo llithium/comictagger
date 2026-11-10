@@ -33,7 +33,7 @@ import comictaggerlib.ui.talkeruigenerator
 from comicapi import merge, utils
 from comicapi._metadata_example import example_metadata
 from comicapi.genericmetadata import GenericMetadata
-from comictaggerlib import ctsettings
+from comictaggerlib import ctsettings, ctversion
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.ctsettings.plugin import ARCHIVE_GROUP
 from comictaggerlib.filerenamer import FileRenamer, FileRenamerConfig, Replacement, Replacements
@@ -657,7 +657,7 @@ class SettingsWindow(QtWidgets.QDialog):
         cache_folder = self.config[0].Runtime_Options__config.user_cache_dir
         shutil.rmtree(cache_folder, ignore_errors=True)
         cache_folder.mkdir(parents=True, exist_ok=True)
-        ComicCacher(cache_folder, "0")
+        ComicCacher(cache_folder, ctversion.version)
         ImageFetcher(cache_folder)
         OptionalMessageDialog.information(self, self.name, "Cache has been cleared.")
 

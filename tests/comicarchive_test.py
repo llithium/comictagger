@@ -91,6 +91,25 @@ def test_failed_zip_export_preserves_destination(tmp_path, monkeypatch):
     assert set(tmp_path.iterdir()) == {source, destination}
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACL syntax")
+def test_zip_replacement_preserves_the_destination_acl(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"replacement page")
+    destination = tmp_path / "existing.cbz"
+    destination.write_bytes(b"old archive")
+    subprocess.run(["chmod", "+a", "user:nobody deny read", str(destination)], check=True)
+    acl_before = subprocess.check_output(["ls", "-le", str(destination)], text=True).splitlines()[1:]
+    assert any("deny read" in entry for entry in acl_before)
+
+    archive = comicapi.archivers.zip.ZipArchiver.open(destination)
+    assert archive.copy_from_archive(FolderArchiver.open(source))
+
+    acl_after = subprocess.check_output(["ls", "-le", str(destination)], text=True).splitlines()[1:]
+    assert acl_after == acl_before
+    assert archive.read_file("001.jpg") == b"replacement page"
+
+
 def test_failed_seven_zip_replacement_preserves_original_archive(cbz, tmp_path, monkeypatch):
     py7zr = pytest.importorskip("py7zr")
     path = tmp_path / "archive.cb7"
@@ -284,10 +303,15 @@ def test_zip_export_uses_a_sibling_folder_if_neither_exclusive_operation_is_avai
     assert not archive.export_as_zip(destination, overwrite=False)
     assert set(tmp_path.iterdir()) == {source}
 
-    exported_path = archive.export_as_new_zip(destination)
+    old_umask = os.umask(0o027)
+    try:
+        exported_path = archive.export_as_new_zip(destination)
+    finally:
+        os.umask(old_umask)
     assert exported_path is not None
     assert exported_path.name == destination.name
     assert exported_path.parent.parent == destination.parent
+    assert stat.S_IMODE(exported_path.parent.stat().st_mode) == 0o750
     with zipfile.ZipFile(exported_path) as exported:
         assert exported.read("001.jpg") == b"page"
     assert set(tmp_path.iterdir()) == {source, exported_path.parent}

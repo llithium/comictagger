@@ -246,6 +246,16 @@ def _publish_export_folder(staged: pathlib.Path, path: pathlib.Path) -> pathlib.
     return folder / path.name
 
 
+def _copy_macos_acl(source: pathlib.Path, target: pathlib.Path) -> None:
+    copyfile = ctypes.CDLL(None, use_errno=True).copyfile
+    copyfile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+    copyfile.restype = ctypes.c_int
+    if copyfile(os.fsencode(source), os.fsencode(target), None, 1) != 0:  # COPYFILE_ACL
+        code = ctypes.get_errno()
+        if code not in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise OSError(code, os.strerror(code), source)
+
+
 def _publish_new_archive(
     staged: pathlib.Path, path: pathlib.Path, *, allow_export_folder: bool, unique: bool
 ) -> pathlib.Path:
@@ -284,11 +294,19 @@ def archive_replacement(
         with suppress(FileNotFoundError):
             mode = stat.S_IMODE(path.stat().st_mode)
     with tempfile.TemporaryDirectory(dir=path.parent) as directory:
-        replacement = ArchiveReplacement(pathlib.Path(directory) / path.name)
+        staging = pathlib.Path(directory)
+        if allow_export_folder:
+            # The outer directory keeps the staged file private until publication.
+            # The inner directory takes its permissions from the user's umask.
+            staging = staging / "export"
+            staging.mkdir()
+        replacement = ArchiveReplacement(staging / path.name)
         yield replacement
         if overwrite:
             if mode is not None:
                 replacement.staged.chmod(mode)
+                if sys.platform == "darwin":
+                    _copy_macos_acl(path, replacement.staged)
             replacement.published = replacement.staged.replace(path)
         else:
             replacement.published = _publish_new_archive(

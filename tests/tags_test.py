@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from importlib.metadata import entry_points
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 import comicapi.genericmetadata
 import testing.comicdata
 from comicapi.archivers.folder import FolderArchiver
+from comicapi.archivers.zip import ZipArchiver
 from comicapi.tags.comicrack import ComicRack
 from comictaggerlib.md import prepare_metadata
 
@@ -100,6 +102,22 @@ def test_comicrack_replaces_a_tag_that_cannot_be_read(tmp_path, monkeypatch, moc
         assert tag.write_tags(comicapi.genericmetadata.GenericMetadata(series="New series"), archive)
 
     assert tag.read_tags(archive).series == "New series"
+
+
+def test_comicrack_can_repair_a_zip_member_with_a_bad_crc(tmp_path, mock_version):
+    path = tmp_path / "damaged-tag.cbz"
+    xml = b"<ComicInfo><Series>old</Series></ComicInfo>"
+    with zipfile.ZipFile(path, "w") as archive_file:
+        archive_file.writestr("001.jpg", b"intact page")
+        archive_file.writestr("ComicInfo.xml", xml)
+    path.write_bytes(path.read_bytes().replace(xml, xml.replace(b"old", b"bad"), 1))
+    archive = ZipArchiver.open(path)
+    tag = ComicRack(mock_version[0])
+    assert not tag.has_tags(archive)
+
+    assert tag.write_tags(comicapi.genericmetadata.GenericMetadata(series="Repaired"), archive)
+    assert tag.read_tags(archive).series == "Repaired"
+    assert archive.read_file("001.jpg") == b"intact page"
 
 
 @pytest.mark.parametrize("encoding", ["shift_jis", "cp932"])

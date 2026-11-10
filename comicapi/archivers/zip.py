@@ -44,13 +44,14 @@ class ZipArchiver(Archiver):
         return True
 
     def read_file(self, archive_file: str) -> bytes:
-        with ZipFile(self.path, mode="r") as zf:
-            try:
-                data = zf.read(archive_file)
-            except (zipfile.BadZipfile, OSError) as e:
-                logger.exception("Error reading zip archive [%s]: %s :: %s", e, self.path, archive_file)
-                raise
-        return data
+        try:
+            with ZipFile(self.path, mode="r") as zf:
+                return zf.read(archive_file)
+        except zipfile.BadZipFile as e:
+            raise OSError(f"Error reading {archive_file} from {self.path}: {e}") from e
+        except OSError as e:
+            logger.exception("Error reading zip archive [%s]: %s :: %s", e, self.path, archive_file)
+            raise
 
     @contextmanager
     def read_session(self) -> Iterator[Callable[[str], bytes]]:
