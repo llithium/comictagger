@@ -631,6 +631,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         archives_to_remove = []
         skipped_list = []
         failed_list = []
+        failed_deletions = []
         folder_exports = []
         success_count = 0
         logger.debug("Exporting %d comics to zip", len(to_zip))
@@ -669,8 +670,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 try:
                     ca.path.unlink(missing_ok=True)
                 except OSError:
-                    logger.exception("Error deleting original archive after export: %s", ca.path)
-                    failed_list.append(ca.path)
+                    logger.exception("Created %s but could not delete the original %s", exported_path, ca.path)
+                    failed_deletions.append((ca.path, exported_path))
                 else:
                     archives_to_remove.append(ca)
 
@@ -690,6 +691,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             summary += f"\n\nThe following {len(failed_list)} archive(s) failed to export due to read/write errors:\n"
             for f in failed_list:
                 summary += f"\t{f}\n"
+        if failed_deletions:
+            summary += "\n\nThe following original archives could not be deleted after export:\n"
+            summary += "\n".join(f"\t{source} (CBZ created at {exported})" for source, exported in failed_deletions)
 
         logger.info(summary)
         dlg = LogWindow(self)

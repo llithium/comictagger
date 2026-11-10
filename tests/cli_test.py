@@ -6,6 +6,8 @@ import pytest
 
 import comicapi.genericmetadata
 import comictaggerlib.cli
+from comicapi.archivers.folder import FolderArchiver
+from comicapi.comicarchive import ComicArchive
 from comictaggerlib.issueidentifier import IssueIdentifier
 from comictaggerlib.issueidentifier import Result as IdentificationResult
 from comictaggerlib.resulttypes import Action, MatchStatus, Result, Status
@@ -39,6 +41,34 @@ def test_export_reports_the_actual_export_folder(config, tmp_path, capsys):
     assert result.status == Status.success
     assert result.renamed_path == exported_path
     assert str(exported_path.relative_to(tmp_path)) in capsys.readouterr().out
+
+
+def test_export_dry_run_matches_live_name_when_a_dangling_symlink_occupies_the_destination(config, tmp_path, capsys):
+    source = tmp_path / "book"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    archive = ComicArchive(FolderArchiver.open(source))
+    occupied = tmp_path / "book.cbz"
+    missing_target = tmp_path / "missing.cbz"
+    try:
+        occupied.symlink_to(missing_target)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks are unavailable")
+
+    settings = config.values
+    settings.Runtime_Options__dryrun = True
+    cli = comictaggerlib.cli.CLI(settings, {})
+    preview = cli.export(archive)
+    message = capsys.readouterr().out
+
+    settings.Runtime_Options__dryrun = False
+    exported = cli.export(archive)
+
+    assert preview.status == exported.status == Status.success
+    assert preview.renamed_path == exported.renamed_path == tmp_path / "book (1).cbz"
+    assert "book (1).cbz" in message
+    assert exported.renamed_path.is_file()
+    assert occupied.readlink() == missing_target
 
 
 def test_online_tag_assume_issue_one_forwards_query_metadata(config, cbz, monkeypatch):

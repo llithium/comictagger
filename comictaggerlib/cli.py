@@ -625,7 +625,9 @@ class CLI:
                         logger.exception("%sError deleting original archive after export", msg_hdr)
         else:
             if unique:
-                new_file = utils.unique_file(new_file)
+                new_file = next(
+                    candidate for candidate in utils.file_name_candidates(new_file) if not os.path.lexists(candidate)
+                )
             msg = msg_hdr + f"Dry-run:  Would try to create {os.path.split(new_file)[1]}"
             if self.config.Runtime_Options__delete_original:
                 msg += " and delete original."

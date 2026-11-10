@@ -114,3 +114,31 @@ def test_dont_create_reports_a_destination_appearing_during_export_as_skipped(tm
     assert destination.read_bytes() == b"another export"
     selection.add_path_list.assert_called_once_with([])
     selection.remove_archive_list.assert_called_once_with([])
+
+
+def test_export_summary_distinguishes_an_undeleted_source_from_a_failed_export(tmp_path, monkeypatch):
+    source = tmp_path / "comic"
+    source.mkdir()
+    page = source / "001.jpg"
+    page.write_bytes(b"source page")
+    destination = tmp_path / "comic.cbz"
+    archive = ComicArchive(FolderArchiver.open(source))
+    selection = SimpleNamespace(
+        get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
+    )
+    window = SimpleNamespace(fileSelectionList=selection)
+    log_window = Mock()
+    monkeypatch.setattr(taggerwindow, "LogWindow", log_window)
+    monkeypatch.setattr(taggerwindow.QtCore.QCoreApplication, "processEvents", Mock())
+
+    taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(ExportConflictOpts.DONT_CREATE, True, True))
+
+    assert destination.is_file()
+    assert page.read_bytes() == b"source page"
+    summary = log_window.return_value.set_text.call_args.args[0]
+    assert "Successfully created 1" in summary
+    assert "could not be deleted after export" in summary
+    assert str(source) in summary and str(destination) in summary
+    assert "failed to export" not in summary
+    selection.add_path_list.assert_called_once_with([str(destination)])
+    selection.remove_archive_list.assert_called_once_with([])
