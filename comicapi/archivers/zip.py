@@ -148,8 +148,9 @@ class ZipArchiver(Archiver):
     ) -> pathlib.Path | None:
         self._filename_list = []
         try:
+            destination = self.path.resolve() if overwrite and self.path.is_symlink() else self.path
             with archive_replacement(
-                self.path, overwrite=overwrite, allow_export_folder=allow_export_folder, unique=unique
+                destination, overwrite=overwrite, allow_export_folder=allow_export_folder, unique=unique
             ) as replacement:
                 with ZipFile(replacement.staged, mode="w", allowZip64=True) as zout, read_archive(
                     other_archive

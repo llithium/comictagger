@@ -1858,10 +1858,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
         for prog_idx, ca in enumerate(ca_list, 1):
             if prog_idx % 10 == 0:
                 QtCore.QCoreApplication.processEvents()
+            prog_dialog.setLabelText(str(ca.path))
+            prog_dialog.setValue(prog_idx - 1)
             if prog_dialog.wasCanceled():
                 break
-            prog_dialog.setValue(prog_idx)
-            prog_dialog.setLabelText(str(ca.path))
             ca_saved = False
             ca_failed = False
             md, _, error = read_configured_tags(ca, src_tag_ids, self.config[0])
@@ -1872,6 +1872,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 continue
 
             for tag_id in dest_tag_ids:
+                QtCore.QCoreApplication.processEvents()
                 if prog_dialog.wasCanceled():
                     break
                 if tag_id == "cbi" and self.config[0].Metadata_Options__apply_transform_on_bulk_operation:

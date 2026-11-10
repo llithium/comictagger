@@ -95,7 +95,8 @@ class SevenZipArchiver(Archiver):
     def copy_from_archive(self, other_archive: Archiver) -> bool:
         self._filename_list = []
         try:
-            with archive_replacement(self.path) as replacement:
+            destination = self.path.resolve() if self.path.is_symlink() else self.path
+            with archive_replacement(destination) as replacement:
                 with py7zr.SevenZipFile(replacement.staged, "w") as zout, read_archive(other_archive) as read:
                     for filename in other_archive.get_filename_list():
                         data = read(filename)

@@ -110,6 +110,37 @@ def test_zip_replacement_preserves_the_destination_acl(tmp_path):
     assert archive.read_file("001.jpg") == b"replacement page"
 
 
+@pytest.mark.parametrize("extension", [".cbz", ".cb7"])
+@pytest.mark.parametrize("target_exists", [True, False], ids=["existing-target", "missing-target"])
+def test_archive_copy_overwrites_through_a_relative_symlink(tmp_path, extension, target_exists):
+    if extension == ".cb7":
+        pytest.importorskip("py7zr")
+        archiver = SevenZipArchiver
+    else:
+        archiver = comicapi.archivers.zip.ZipArchiver
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"replacement page")
+    relative_target = pathlib.Path("library") / f"existing{extension}"
+    target = tmp_path / relative_target
+    target.parent.mkdir()
+    if target_exists:
+        target.write_bytes(b"old archive")
+    link = tmp_path / f"linked{extension}"
+    try:
+        link.symlink_to(relative_target)
+    except OSError:
+        if os.name == "nt":
+            pytest.skip("creating symlinks requires Windows Developer Mode or elevated permissions")
+        raise
+
+    assert archiver.open(link).copy_from_archive(FolderArchiver.open(source))
+
+    assert link.readlink() == relative_target
+    assert archiver.open(target).read_file("001.jpg") == b"replacement page"
+
+
 def test_failed_seven_zip_replacement_preserves_original_archive(cbz, tmp_path, monkeypatch):
     py7zr = pytest.importorskip("py7zr")
     path = tmp_path / "archive.cb7"
