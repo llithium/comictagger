@@ -212,6 +212,10 @@ def _rename_exclusive(source: pathlib.Path, target: pathlib.Path) -> None:
 _EXCLUSIVE_UNSUPPORTED = (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL)
 
 
+class ArchiveExportCollision(FileExistsError):
+    """The requested export destination is occupied at publication."""
+
+
 def _publish_at_path(staged: pathlib.Path, path: pathlib.Path) -> None:
     if os.name == "nt":
         staged.rename(path)
@@ -250,16 +254,16 @@ def _publish_new_archive(
         candidate = next(candidates)
         try:
             _publish_at_path(staged, candidate)
-        except FileExistsError:
+        except FileExistsError as error:
             if not unique:
-                raise
+                raise ArchiveExportCollision(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from error
         except OSError as error:
             if not allow_export_folder or os.name == "nt" or error.errno not in _EXCLUSIVE_UNSUPPORTED:
                 raise
             if not os.path.lexists(candidate):
                 return _publish_export_folder(staged, candidate)
             if not unique:
-                raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from None
+                raise ArchiveExportCollision(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from None
         else:
             return candidate
 

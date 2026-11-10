@@ -28,6 +28,7 @@ from functools import partial
 from typing import Any, TextIO
 
 from comicapi import merge, utils
+from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.cbltransformer import CBLTransformer
@@ -601,14 +602,19 @@ class CLI:
         new_file = filename_path.with_suffix(".cbz")
         unique = not self.config.Runtime_Options__abort_on_conflict
 
-        if not unique and new_file.exists():
-            self.output("%s%s already exists in the that folder.", msg_hdr, new_file.name)
+        if not unique and os.path.lexists(new_file):
+            self.output(f"{msg_hdr}{new_file.name} already exists in the destination folder.")
             return Result(Action.export, Status.write_failure, ca.path)
 
         delete_success = False
         export_success = False
         if not self.config.Runtime_Options__dryrun:
-            if (exported_path := ca.export_as_new_zip(new_file, unique=unique)) is not None:
+            try:
+                exported_path = ca.export_as_new_zip(new_file, unique=unique)
+            except ArchiveExportCollision:
+                self.output(f"{msg_hdr}{new_file.name} already exists in the destination folder.")
+                return Result(Action.export, Status.write_failure, ca.path)
+            if exported_path is not None:
                 new_file = exported_path
                 export_success = True
                 if self.config.Runtime_Options__delete_original:

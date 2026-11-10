@@ -7,6 +7,8 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from comicapi.archivers.folder import FolderArchiver
+from comicapi.comicarchive import ComicArchive
 from comictaggerlib import taggerwindow
 from comictaggerlib.exportwindow import ExportConfig, ExportConflictOpts
 
@@ -78,3 +80,37 @@ def test_export_conflict_and_source_deletion(
         assert str(exported_path) in taggerwindow.LogWindow.return_value.set_text.call_args.args[0]
     if existing:
         assert destination.read_bytes() == b"existing"
+
+
+def test_dont_create_reports_a_destination_appearing_during_export_as_skipped(tmp_path, monkeypatch):
+    source = tmp_path / "comic"
+    source.mkdir()
+    page = source / "001.jpg"
+    page.write_bytes(b"source page")
+    destination = tmp_path / "comic.cbz"
+    archiver = FolderArchiver.open(source)
+    archive = ComicArchive(archiver)
+    read_file = archiver.read_file
+
+    def read_while_another_export_finishes(name):
+        destination.write_bytes(b"another export")
+        return read_file(name)
+
+    monkeypatch.setattr(archiver, "read_file", read_while_another_export_finishes)
+    selection = SimpleNamespace(
+        get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
+    )
+    window = SimpleNamespace(fileSelectionList=selection)
+    log_window = Mock()
+    monkeypatch.setattr(taggerwindow, "LogWindow", log_window)
+    monkeypatch.setattr(taggerwindow.QtCore.QCoreApplication, "processEvents", Mock())
+
+    taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(ExportConflictOpts.DONT_CREATE, True, True))
+
+    summary = log_window.return_value.set_text.call_args.args[0]
+    assert "1 archive(s) were skipped due to file name conflicts" in summary
+    assert "failed to export" not in summary
+    assert page.read_bytes() == b"source page"
+    assert destination.read_bytes() == b"another export"
+    selection.add_path_list.assert_called_once_with([])
+    selection.remove_archive_list.assert_called_once_with([])

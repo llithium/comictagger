@@ -37,6 +37,7 @@ from PyQt6 import QtCore, QtGui, QtNetwork, QtWidgets, uic
 import comicapi.merge
 import comictaggerlib.ui
 from comicapi import utils
+from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.filenameparser import FileNameParser
 from comicapi.genericmetadata import Credit, FileHash, GenericMetadata
@@ -645,31 +646,33 @@ class TaggerWindow(QtWidgets.QMainWindow):
                     QtCore.QCoreApplication.processEvents()
 
             export_name = ca.path.with_suffix(".cbz")
-            export = True
-
-            if export_name.exists() and export_config.conflict == ExportConflictOpts.DONT_CREATE:
-                export = False
+            unique = export_config.conflict == ExportConflictOpts.CREATE_UNIQUE
+            if not unique and os.path.lexists(export_name):
                 skipped_list.append(ca.path)
-            if export:
-                logger.debug("Exporting %s to %s", ca.path, export_name)
-                unique = export_config.conflict == ExportConflictOpts.CREATE_UNIQUE
-                if (exported_path := ca.export_as_new_zip(export_name, unique=unique)) is not None:
-                    success_count += 1
-                    if exported_path.parent != export_name.parent:
-                        folder_exports.append(exported_path)
-                    if export_config.add_to_list:
-                        new_archives_to_add.append(str(exported_path))
-                    if export_config.delete_original:
-                        try:
-                            ca.path.unlink(missing_ok=True)
-                        except OSError:
-                            logger.exception("Error deleting original archive after export: %s", ca.path)
-                            failed_list.append(ca.path)
-                        else:
-                            archives_to_remove.append(ca)
+                continue
+            logger.debug("Exporting %s to %s", ca.path, export_name)
+            try:
+                exported_path = ca.export_as_new_zip(export_name, unique=unique)
+            except ArchiveExportCollision:
+                skipped_list.append(ca.path)
+                continue
+            if exported_path is None:
+                failed_list.append(ca.path)
+                continue
 
-                else:
+            success_count += 1
+            if exported_path.parent != export_name.parent:
+                folder_exports.append(exported_path)
+            if export_config.add_to_list:
+                new_archives_to_add.append(str(exported_path))
+            if export_config.delete_original:
+                try:
+                    ca.path.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("Error deleting original archive after export: %s", ca.path)
                     failed_list.append(ca.path)
+                else:
+                    archives_to_remove.append(ca)
 
         if prog_dialog is not None:
             prog_dialog.hide()

@@ -187,7 +187,7 @@ class App:
 
     def register_settings(self, enable_quick_tag: bool) -> None:
         self.archiver_executables = {
-            archiver: getattr(archiver, "default_exe", os.path.basename(archiver.exe))
+            archiver: ctsettings.plugin.archiver_executable(archiver)
             for archiver in comicapi.comicarchive.archivers
             if archiver.exe
         }

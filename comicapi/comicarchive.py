@@ -453,6 +453,7 @@ class ComicArchive:
         return zip_archiver.copy_from_archive(self.archiver, overwrite=overwrite)
 
     def export_as_new_zip(self, zip_filename: pathlib.Path, *, unique: bool = False) -> pathlib.Path | None:
+        """Export without overwriting. An occupied name raises ArchiveExportCollision unless unique is enabled."""
         if self.is_zip():
             return self.path
         zip_archiver = ZipArchiver()

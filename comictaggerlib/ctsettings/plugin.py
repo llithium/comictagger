@@ -20,6 +20,17 @@ def group_for_plugin(talker: ComicTalker) -> str:
     return f"Source {talker.id}"
 
 
+def archiver_executable(archiver: type[Archiver]) -> str:
+    """Use the closest declaration of an executable or its stable default."""
+    for owner in archiver.__mro__:
+        default = vars(owner).get("default_exe")
+        if isinstance(default, str):
+            return default
+        if "exe" in vars(owner):
+            break
+    return os.path.basename(archiver.exe)
+
+
 def register_archive_settings(manager: settngs.Manager, executables: Mapping[type[Archiver], str]) -> None:
     options = {settngs.sanitize_name(exe): exe for exe in executables.values()}
     for name, exe in options.items():

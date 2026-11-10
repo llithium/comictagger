@@ -11,6 +11,7 @@ import settngs
 import comictaggerlib.ctsettings.types
 from comicapi import comicarchive, utils
 from comicapi._metadata_example import example_metadata
+from comicapi.archivers.rar import RarArchiver
 from comictaggerlib import ctsettings
 from comictaggerlib.ctsettings import ComicTaggerPaths, plugin
 from comictaggerlib.ctsettings.types import parse_metadata_from_string
@@ -88,6 +89,26 @@ def test_archive_executable_options_keep_the_declared_name(monkeypatch, tmp_path
     paths.settings_file.write_text(json.dumps({"Archive": {"test_archiver": "bin/second"}}), encoding="utf-8")
     app.parse_settings(paths, "--config", str(tmp_path))
     assert TestArchiver.exe == str(pathlib.Path("bin/second").absolute())
+
+
+def test_rar_plugins_can_declare_an_independent_executable(monkeypatch, tmp_path):
+    class CustomRar(RarArchiver):
+        exe = "custom-rar"
+
+    class CustomRarVariant(CustomRar):
+        pass
+
+    monkeypatch.setattr(comicarchive, "archivers", [RarArchiver, CustomRar, CustomRarVariant])
+    monkeypatch.setattr(RarArchiver, "exe", str(tmp_path / "previous-rar"))
+    app = App()
+    app.register_settings(False)
+    bundled_path = tmp_path / "bundled-rar"
+    custom_path = tmp_path / "custom-rar"
+
+    app.parse_settings(ComicTaggerPaths(tmp_path), "--rar", str(bundled_path), "--custom_rar", str(custom_path))
+
+    assert RarArchiver.exe == str(bundled_path)
+    assert CustomRar.exe == CustomRarVariant.exe == str(custom_path)
 
 
 def test_quick_tag_url_and_legacy_tag_ids_round_trip(tmp_path):

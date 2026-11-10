@@ -126,9 +126,10 @@ class ComicRack(Tag):
     def _read_xml(self, archive: Archiver) -> ET.Element | None:
         if not self.supports_tags(archive) or self.file not in archive.get_filename_list():
             return None
+        xml = archive.read_file(self.file)
         try:
-            root = ET.fromstring(archive.read_file(self.file))
-        except (ET.ParseError, LookupError):
+            root = ET.fromstring(xml)
+        except (ET.ParseError, LookupError, ValueError):
             return None
         return root if root.tag == "ComicInfo" else None
 

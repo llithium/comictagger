@@ -9,7 +9,7 @@ from contextlib import ExitStack, contextmanager
 import chardet
 from zipremove import ZipFile
 
-from comicapi.archivers.archiver import Archiver, archive_replacement, read_archive
+from comicapi.archivers.archiver import ArchiveExportCollision, Archiver, archive_replacement, read_archive
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,10 @@ class ZipArchiver(Archiver):
 
     def copy_from_archive(self, other_archive: Archiver, *, overwrite: bool = True) -> bool:
         """Replace the current zip with one copied from another archive"""
-        return self._copy_from_archive(other_archive, overwrite=overwrite) is not None
+        try:
+            return self._copy_from_archive(other_archive, overwrite=overwrite) is not None
+        except ArchiveExportCollision:
+            return False
 
     def export_from_archive(self, other_archive: Archiver, *, unique: bool = False) -> pathlib.Path | None:
         """Publish a new ZIP and return its path, including any export folder."""
@@ -157,6 +160,8 @@ class ZipArchiver(Archiver):
                     comment = other_archive.get_comment()
                     if comment is not None:
                         zout.comment = comment.encode("utf-8")
+        except ArchiveExportCollision:
+            raise
         except Exception as e:
             logger.error("Error while copying to zip archive [%s]: from %s to %s", e, other_archive.path, self.path)
             return None

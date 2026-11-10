@@ -157,7 +157,8 @@ def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path,
     if allow_folder:
         monkeypatch.setattr(os, "link", unsupported_publication)
         monkeypatch.setattr(archive_operations, "_rename_exclusive", unsupported_publication)
-        assert archive.export_as_new_zip(destination) is None
+        with pytest.raises(archive_operations.ArchiveExportCollision):
+            archive.export_as_new_zip(destination)
     else:
         assert not archive.export_as_zip(destination, overwrite=False)
     assert destination.read_bytes() == b"another export"

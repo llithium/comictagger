@@ -102,6 +102,17 @@ def test_comicrack_replaces_a_tag_that_cannot_be_read(tmp_path, monkeypatch, moc
     assert tag.read_tags(archive).series == "New series"
 
 
+@pytest.mark.parametrize("encoding", ["shift_jis", "cp932"])
+def test_comicrack_replaces_a_tag_with_an_unsupported_xml_encoding(tmp_path, mock_version, encoding):
+    tag = ComicRack(mock_version[0])
+    archive = FolderArchiver.open(tmp_path)
+    xml = f'<?xml version="1.0" encoding="{encoding}"?><ComicInfo><Series>漫画</Series></ComicInfo>'
+    assert archive.write_file("ComicInfo.xml", xml.encode(encoding))
+
+    assert tag.write_tags(comicapi.genericmetadata.GenericMetadata(series="新シリーズ"), archive)
+    assert tag.read_tags(archive).series == "新シリーズ"
+
+
 @pytest.mark.parametrize("metadata, expected", testing.comicdata.metadata_prepared)
 def test_prepare_metadata(mock_version, mock_now, config, metadata, expected):
     new_md = prepare_metadata(metadata[0], metadata[1], config[0])
