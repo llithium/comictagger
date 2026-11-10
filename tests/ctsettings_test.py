@@ -111,6 +111,32 @@ def test_rar_plugins_can_declare_an_independent_executable(monkeypatch, tmp_path
     assert CustomRar.exe == CustomRarVariant.exe == str(custom_path)
 
 
+def test_archiver_executable_paths_remain_defaults_under_their_basename_option(monkeypatch, tmp_path):
+    first_executable = str(tmp_path / "first-vendor" / "bin" / "custom-rar")
+    second_executable = str(tmp_path / "second-vendor" / "bin" / "custom-rar")
+
+    class FirstArchiver(comicarchive.Archiver):
+        exe = first_executable
+
+    class SecondArchiver(comicarchive.Archiver):
+        exe = second_executable
+
+    monkeypatch.setattr(comicarchive, "archivers", [FirstArchiver, SecondArchiver])
+    paths = ComicTaggerPaths(tmp_path)
+    app = App()
+    app.register_settings(False)
+
+    app.parse_settings(paths, "--config", str(tmp_path))
+
+    assert FirstArchiver.exe == first_executable
+    assert SecondArchiver.exe == second_executable
+
+    override = str(tmp_path / "override-rar")
+    app.parse_settings(paths, "--custom_rar", override)
+
+    assert FirstArchiver.exe == SecondArchiver.exe == override
+
+
 def test_quick_tag_url_and_legacy_tag_ids_round_trip(tmp_path):
     paths = ComicTaggerPaths(tmp_path)
     paths.settings_file.write_text(json.dumps({"internal": {"read_tags": 0, "write_tags": "comet"}}), encoding="utf-8")

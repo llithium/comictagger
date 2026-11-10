@@ -28,11 +28,15 @@ def archiver_executable(archiver: type[Archiver]) -> str:
             return default
         if "exe" in vars(owner):
             break
-    return os.path.basename(archiver.exe)
+    return archiver.exe
+
+
+def _archive_executable_option(executable: str) -> str:
+    return settngs.sanitize_name(os.path.basename(executable))
 
 
 def register_archive_settings(manager: settngs.Manager, executables: Mapping[type[Archiver], str]) -> None:
-    options = {settngs.sanitize_name(exe): exe for exe in executables.values()}
+    options = {_archive_executable_option(exe): exe for exe in executables.values()}
     for name, exe in options.items():
         manager.add_setting(f"--{name}", default=exe, help="Path to the %(default)s executable")
 
@@ -64,11 +68,14 @@ def register_talker_settings(manager: settngs.Manager, talkers: Mapping[str, Com
 
 
 def apply_archive_settings(config: settngs.Config[ct_ns], executables: Mapping[type[Archiver], str]) -> None:
-    cfg = settngs.normalize_config(config, file=True, cmdline=True)
+    cfg = settngs.normalize_config(config, file=True, cmdline=True, default=False)
     options = cfg.values.get(ARCHIVE_GROUP, {})
     for archiver, executable in executables.items():
-        path = options.get(settngs.sanitize_name(executable)) or executable
-        archiver.exe = os.path.abspath(path) if os.path.basename(path) != path else path
+        path = options.get(_archive_executable_option(executable))
+        if path:
+            archiver.exe = os.path.abspath(path) if os.path.basename(path) != path else path
+        else:
+            archiver.exe = executable
 
 
 def validate_talker_settings(config: settngs.Config[ct_ns], talkers: dict[str, ComicTalker]) -> settngs.Config[ct_ns]:
