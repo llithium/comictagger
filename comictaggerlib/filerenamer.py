@@ -34,6 +34,7 @@ from pathvalidate import Platform, normalize_platform, sanitize_filename
 from comicapi.comicarchive import ComicArchive
 from comicapi.genericmetadata import GenericMetadata
 from comicapi.issuestring import IssueString
+from comicapi.utils import unique_file
 from comictaggerlib.defaults import DEFAULT_REPLACEMENTS, Replacement, Replacements
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,8 @@ class RenameSettings(Protocol):
     File_Rename__kapowarr_naming: bool
     File_Rename__kapowarr_long_special_versions: bool
     File_Rename__replacements: Replacements
+    File_Rename__auto_extension: bool
+    File_Rename__dir: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,6 +143,42 @@ def get_rename_dir(ca: ComicArchive, rename_dir: str | pathlib.Path | None) -> p
             rename_dir = pathlib.Path(rename_dir.strip())
         folder = rename_dir.absolute()
     return folder
+
+
+class MissingRenameDirectory(ValueError):
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class RenamePlan:
+    archive: ComicArchive
+    folder: pathlib.Path
+    name: str
+    remove_empty_source_dir: bool
+
+    @classmethod
+    def build(cls, archive: ComicArchive, metadata: GenericMetadata, settings: RenameSettings) -> RenamePlan:
+        config = FileRenamerConfig.from_settings(settings)
+        if config.kapowarr_naming and not settings.File_Rename__dir.strip():
+            raise MissingRenameDirectory("Kapowarr-compatible naming requires a library root")
+        rename_dir = settings.File_Rename__dir if config.move or config.kapowarr_naming else None
+        extension = archive.extension() if settings.File_Rename__auto_extension else archive.path.suffix
+        renamer = FileRenamer(None)
+        renamer.apply_config(config)
+        renamer.set_metadata(metadata, archive.path.name)
+        return cls(
+            archive, get_rename_dir(archive, rename_dir), renamer.determine_name(extension), config.kapowarr_naming
+        )
+
+    @property
+    def target(self) -> pathlib.Path:
+        return self.folder / self.name
+
+    def available_target(self) -> pathlib.Path:
+        return self.target if self.target == self.archive.path else unique_file(self.target)
+
+    def apply(self, target: pathlib.Path) -> None:
+        self.archive.rename(target, remove_empty_source_dir=self.remove_empty_source_dir)
 
 
 class MetadataFormatter(string.Formatter):

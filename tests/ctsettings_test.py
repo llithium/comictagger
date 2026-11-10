@@ -1,26 +1,32 @@
 from __future__ import annotations
 
 import argparse
+import json
+import pathlib
 from unittest.mock import Mock
 
 import pytest
 import settngs
 
-import comicapi.genericmetadata
 import comictaggerlib.ctsettings.types
-from comictaggerlib.ctsettings import plugin
+from comicapi import comicarchive, utils
+from comicapi._metadata_example import example_metadata
+from comicapi.archivers.rar import RarArchiver
+from comictaggerlib import ctsettings
+from comictaggerlib.ctsettings import ComicTaggerPaths, plugin
 from comictaggerlib.ctsettings.types import parse_metadata_from_string
+from comictaggerlib.main import App
 from comictalker import ComicTalker
 
 md_strings = (
-    ("", comicapi.genericmetadata.md_test.replace()),
-    ("year:", comicapi.genericmetadata.md_test.replace(year=None)),
-    ("year: 2009", comicapi.genericmetadata.md_test.replace(year=2009)),
-    ("series:", comicapi.genericmetadata.md_test.replace(series=None)),
-    ("series_aliases:", comicapi.genericmetadata.md_test.replace(series_aliases=set())),
-    ("black_and_white:", comicapi.genericmetadata.md_test.replace(black_and_white=None)),
-    ("credits:", comicapi.genericmetadata.md_test.replace(credits=[])),
-    ("story_arcs:", comicapi.genericmetadata.md_test.replace(story_arcs=[])),
+    ("", example_metadata.replace()),
+    ("year:", example_metadata.replace(year=None)),
+    ("year: 2009", example_metadata.replace(year=2009)),
+    ("series:", example_metadata.replace(series=None)),
+    ("series_aliases:", example_metadata.replace(series_aliases=set())),
+    ("black_and_white:", example_metadata.replace(black_and_white=None)),
+    ("credits:", example_metadata.replace(credits=[])),
+    ("story_arcs:", example_metadata.replace(story_arcs=[])),
 )
 
 
@@ -63,3 +69,88 @@ def test_invalid_talker_settings_remove_only_the_failed_talker():
 
     assert set(talkers) == {"healthy"}
     talkers["healthy"].parse_settings.assert_called_once()
+
+
+def test_archive_executable_options_keep_the_declared_name(monkeypatch, tmp_path):
+    class TestArchiver(comicarchive.Archiver):
+        exe = "test-archiver"
+
+        def __init__(self):
+            raise AssertionError("An executable setting does not require opening an archiver")
+
+    monkeypatch.setattr(comicarchive, "archivers", [TestArchiver])
+    app = App()
+    app.register_settings(False)
+    paths = ComicTaggerPaths(tmp_path)
+
+    app.parse_settings(paths, "--test_archiver", "bin/first")
+    assert TestArchiver.exe == str(pathlib.Path("bin/first").absolute())
+
+    paths.settings_file.write_text(json.dumps({"Archive": {"test_archiver": "bin/second"}}), encoding="utf-8")
+    app.parse_settings(paths, "--config", str(tmp_path))
+    assert TestArchiver.exe == str(pathlib.Path("bin/second").absolute())
+
+
+def test_rar_plugins_can_declare_an_independent_executable(monkeypatch, tmp_path):
+    class CustomRar(RarArchiver):
+        exe = "custom-rar"
+
+    class CustomRarVariant(CustomRar):
+        pass
+
+    monkeypatch.setattr(comicarchive, "archivers", [RarArchiver, CustomRar, CustomRarVariant])
+    monkeypatch.setattr(RarArchiver, "exe", str(tmp_path / "previous-rar"))
+    app = App()
+    app.register_settings(False)
+    bundled_path = tmp_path / "bundled-rar"
+    custom_path = tmp_path / "custom-rar"
+
+    app.parse_settings(ComicTaggerPaths(tmp_path), "--rar", str(bundled_path), "--custom_rar", str(custom_path))
+
+    assert RarArchiver.exe == str(bundled_path)
+    assert CustomRar.exe == CustomRarVariant.exe == str(custom_path)
+
+
+def test_archiver_executable_paths_remain_defaults_under_their_basename_option(monkeypatch, tmp_path):
+    first_executable = str(tmp_path / "first-vendor" / "bin" / "custom-rar")
+    second_executable = str(tmp_path / "second-vendor" / "bin" / "custom-rar")
+
+    class FirstArchiver(comicarchive.Archiver):
+        exe = first_executable
+
+    class SecondArchiver(comicarchive.Archiver):
+        exe = second_executable
+
+    monkeypatch.setattr(comicarchive, "archivers", [FirstArchiver, SecondArchiver])
+    paths = ComicTaggerPaths(tmp_path)
+    app = App()
+    app.register_settings(False)
+
+    app.parse_settings(paths, "--config", str(tmp_path))
+
+    assert FirstArchiver.exe == first_executable
+    assert SecondArchiver.exe == second_executable
+
+    override = str(tmp_path / "override-rar")
+    app.parse_settings(paths, "--custom_rar", override)
+
+    assert FirstArchiver.exe == SecondArchiver.exe == override
+
+
+def test_quick_tag_url_and_legacy_tag_ids_round_trip(tmp_path):
+    paths = ComicTaggerPaths(tmp_path)
+    paths.settings_file.write_text(json.dumps({"internal": {"read_tags": 0, "write_tags": "comet"}}), encoding="utf-8")
+    url = "https://example.com:443/cover/search"
+    args = ["--config", str(tmp_path), "-vv", "--enable-quick-tag"]
+    bootstrap, _ = ctsettings.initial_commandline_parser().parse_known_intermixed_args(args)
+    app = App()
+    app.register_settings(bootstrap.enable_quick_tag)
+    config = app.parse_settings(bootstrap.config, *args, "--url", url)
+
+    assert config.values.Runtime_Options__verbose == bootstrap.verbose == 2
+    assert config.values.internal__read_tags == ["cbi"]
+    assert config.values.internal__write_tags == ["comet"]
+    assert ctsettings.save_file(config, paths.settings_file)
+    saved = json.loads(paths.settings_file.read_text(encoding="utf-8"))
+    assert saved["Quick Tag"]["url"] == url
+    assert app.parse_settings(paths, *args).values.Quick_Tag__url == utils.parse_url(url)

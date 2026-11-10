@@ -7,7 +7,7 @@ import logging
 import pathlib
 import sqlite3
 import statistics
-import threading
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from enum import auto
 from functools import cached_property
@@ -30,11 +30,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.1"
-
 
 class HashType(utils.StrEnum):
-    # Unknown = 'Unknown'
     PHASH = auto()
     DHASH = auto()
     AHASH = auto()
@@ -176,68 +173,24 @@ class NameMatches(NamedTuple):
 
 
 class IDCache:
-    def __init__(self, cache_folder: pathlib.Path, version: str) -> None:
-        self.cache_folder = cache_folder
+    def __init__(self, cache_folder: pathlib.Path) -> None:
+        cache_folder.mkdir(parents=True, exist_ok=True)
         self.db_file = cache_folder / "bad_ids.db"
-        self.version = version
-        self.local: threading.Thread | None = None
-        self.db: sqlite3.Connection | None = None
-
-        self.create_cache_db()
-
-    def clear_cache(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
-        try:
-            self.db_file.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    def connect(self) -> sqlite3.Connection:
-        if self.local != threading.current_thread():
-            self.db = None
-        if self.db is None:
-            self.local = threading.current_thread()
-            self.db = sqlite3.connect(self.db_file)
-            self.db.row_factory = sqlite3.Row
-            self.db.text_factory = str
-        return self.db
-
-    def close(self) -> None:
-        if self.db is not None:
-            self.db.close()
-            self.db = None
-
-    def create_cache_db(self) -> None:
-        # create tables
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-            cur.execute("""CREATE TABLE IF NOT EXISTS bad_ids(
-                domain      TEXT NOT NULL,
-                id          TEXT NOT NULL,
+        with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+            con.execute("""CREATE TABLE IF NOT EXISTS bad_ids(
+                domain TEXT NOT NULL,
+                id TEXT NOT NULL,
                 PRIMARY KEY (id, domain))""")
 
     def add_ids(self, bad_ids: set[ID]) -> None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-
-            for bad_id in bad_ids:
-                cur.execute(
-                    """INSERT into bad_ids (domain, ID) VALUES (?, ?) ON CONFLICT DO NOTHING""",
-                    (bad_id.Domain, bad_id.ID),
-                )
+        with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+            con.executemany("INSERT INTO bad_ids (domain, id) VALUES (?, ?) ON CONFLICT DO NOTHING", bad_ids)
 
     def get_ids(self) -> dict[str, set[ID]]:
-        # purge stale series info
-        ids: dict[str, set[ID]] = utils.DefaultDict(default=lambda x: set())
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-            cur.execute(
-                """SELECT * FROM bad_ids""",
-            )
-
-            for record in cur.fetchall():
-                ids[record["domain"]] |= {ID(Domain=record["domain"], ID=record["id"])}
-
+        ids: dict[str, set[ID]] = defaultdict(set)
+        with contextlib.closing(sqlite3.connect(self.db_file)) as con:
+            for domain, issue_id in con.execute("SELECT domain, id FROM bad_ids"):
+                ids[domain].add(ID(domain, issue_id))
         return ids
 
 
@@ -288,14 +241,14 @@ KNOWN_BAD_IDS: dict[str, set[ID]] = utils.DefaultDict(
 )
 
 
-def limit(results: Iterable[Hashes], limit: int) -> list[list[Hashes]]:
+def _group_top_candidates(results: Iterable[Hashes], remaining: int) -> list[list[Hashes]]:
     hashes: list[list[Hashes]] = []
-    r = list(results)
-    for _, result_list in itertools.groupby(r, key=lambda r: r.count):
+    ordered = sorted(results, key=lambda result: result.key)
+    for _, result_list in itertools.groupby(ordered, key=lambda result: result.count):
         result_l = list(result_list)
-        hashes.append(sorted(result_l[:limit], key=lambda r: r.key))
-        limit -= len(result_l)
-        if limit <= 0:
+        hashes.append(result_l[:remaining])
+        remaining -= len(result_l)
+        if remaining <= 0:
             break
     return hashes
 
@@ -308,8 +261,7 @@ class QuickTag:
         self.url = url
         self.talker = talker
         self.domain = domain
-        self.config = config
-        self.bad_ids = IDCache(config.Runtime_Options__config.user_cache_dir, __version__)
+        self.bad_ids = IDCache(config.Runtime_Options__config.user_cache_dir)
 
         self.known_bad_ids = self.bad_ids.get_ids()
         for domain, bad_ids in KNOWN_BAD_IDS.items():
@@ -332,9 +284,7 @@ class QuickTag:
         cover_index = tags.get_cover_page_index_list()[0]
         cover_image = Image.open(BytesIO(ca.get_page(cover_index)))
         cover_image.load()
-        self.limit = 30
-        if aggressive_filtering:
-            self.limit = 15
+        max_results = 15 if aggressive_filtering else 30
 
         self.output(f"Tagging: {ca.path}")
 
@@ -368,13 +318,12 @@ class QuickTag:
                 key=lambda r: r[0],
             )
         ]
-        IDs = sorted(IDs, key=lambda r: r.key)
         self.output(f"Total number of IDs found: {len(IDs)}")
         logger.debug("IDs=%s", IDs)
 
-        aggressive_results, display_results = self.match_results(IDs, aggressive_filtering)
+        aggressive_results, display_results = self.match_results(IDs, aggressive_filtering, max_results=max_results)
         chosen_result = self.display_results(
-            aggressive_results, display_results, ca, tags, interactive, aggressive_filtering
+            aggressive_results, display_results, ca, tags, interactive, aggressive_filtering, max_results=max_results
         )
         if chosen_result:
             return self.talker.fetch_comic_data(issue_id=chosen_result.ID, on_rate_limit=None)
@@ -393,11 +342,12 @@ class QuickTag:
                 "phash": phash,
                 "exactOnly": str(exact_only),
             },
+            timeout=60,
         )
         if resp.status_code != 200:
             try:
                 text = resp.json()["msg"]
-            except Exception:
+            except (ValueError, KeyError, TypeError):
                 text = resp.text
             if text == "No hashes found":
                 return []
@@ -407,17 +357,13 @@ class QuickTag:
 
     def get_mds(self, ids: Iterable[ID]) -> list[GenericMetadata]:
         md_results: list[GenericMetadata] = []
-        ids = set(ids)
         relevant_ids = {md_id for md_id in ids if md_id.Domain == self.domain}
-
-        all_ids = {md_id.ID for md_id in ids if md_id.Domain == self.domain}
-
-        logger.debug("Removed %d ids that are not for %s", len(ids - relevant_ids), self.domain)
+        all_ids = {md_id.ID for md_id in relevant_ids}
 
         self.output(f"Retrieving basic {self.talker.name} data for {len(relevant_ids)} results")
-        # Try to do a bulk fetch of basic issue data, if we have more than 1 id
-        if hasattr(self.talker, "fetch_comics") and len(all_ids) > 1:
-            md_results = self.talker.fetch_comics(issue_ids=list(all_ids), on_rate_limit=None)
+        bulk_fetch = getattr(self.talker, "fetch_comics", None)
+        if callable(bulk_fetch) and len(all_ids) > 1:
+            md_results = bulk_fetch(issue_ids=sorted(all_ids), on_rate_limit=None)
         else:
             for md_id in all_ids:
                 md_results.append(self.talker.fetch_comic_data(issue_id=md_id, on_rate_limit=None))
@@ -481,12 +427,32 @@ class QuickTag:
             )
         return aggressive_groups, groups
 
-    def match_results(self, results: list[Hashes], aggressive_filtering: bool) -> tuple[list[Hashes], list[Hashes]]:
-        results = [r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())]
+    def _eligible_candidates(self, results: Iterable[Hashes]) -> list[Hashes]:
+        bad_ids = self.known_bad_ids.get(self.domain, set())
+        return [result for result in results if result.id.Domain == self.domain and result.id not in bad_ids]
+
+    def _candidate_index(self, results: Iterable[Hashes], max_results: int) -> dict[ID, Hashes]:
+        return {
+            result.id: result
+            for group in _group_top_candidates(self._eligible_candidates(results), max_results)
+            for result in group
+        }
+
+    def _candidate_metadata(self, candidates: dict[ID, Hashes]) -> list[tuple[Hashes, GenericMetadata]]:
+        results = []
+        for md in self.get_mds(candidates):
+            if md.issue_id is not None and (candidate := candidates.get(ID(self.domain, md.issue_id))) is not None:
+                results.append((candidate, md))
+        return results
+
+    def match_results(
+        self, results: list[Hashes], aggressive_filtering: bool, *, max_results: int
+    ) -> tuple[list[Hashes], list[Hashes]]:
+        results = self._eligible_candidates(results)
         exact = [r for r in results if r.exact]
 
-        limited = limit(results, self.limit)
-        logger.debug("Only looking at the top %d out of %d hash scores", min(len(results), self.limit), len(results))
+        limited = _group_top_candidates(results, max_results)
+        logger.debug("Only looking at the top %d out of %d hash scores", min(len(results), max_results), len(results))
 
         # Filter out results if there is a gap > 3 in distance
         for i, hashed_results in enumerate(limited):
@@ -504,11 +470,10 @@ class QuickTag:
         confident_match: list[tuple[Hashes, GenericMetadata]] = []
         probable_match: list[tuple[Hashes, GenericMetadata]] = []
         for result, md in results:
-            assert md.issue_id
-            assert md.series
-            assert md.issue
-            titles_match = tags.series and utils.titles_match(tags.series, md.series, threshold=70)
-            issues_match = tags.issue and IssueString(tags.issue).as_string() == IssueString(md.issue).as_string()
+            titles_match = tags.series and md.series and utils.titles_match(tags.series, md.series, threshold=70)
+            issues_match = (
+                tags.issue and md.issue and IssueString(tags.issue).as_string() == IssueString(md.issue).as_string()
+            )
             if titles_match and issues_match:
                 confident_match.append((result, md))
             elif (titles_match or issues_match) and result.distance < 6:
@@ -519,17 +484,13 @@ class QuickTag:
         self,
         results: list[Hashes],
         tags: GenericMetadata,
+        *,
+        max_results: int,
     ) -> Hashes | None:
         # This matching is only useful with a series name or an issue number
         if not (tags.series or tags.issue):
             return None
-        limited = limit((r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())), self.limit)
-
-        ids = {r.id: r for r in itertools.chain.from_iterable(limited)}
-
-        mds = [(ids[ID(self.domain, md.issue_id)], md) for md in self.get_mds(ids)]  # type: ignore[arg-type]
-
-        matches = self.match_names(tags, mds)
+        matches = self.match_names(tags, self._candidate_metadata(self._candidate_index(results, max_results)))
 
         if len(matches.confident_match) == 1:
             result, md = matches.confident_match[0]
@@ -550,10 +511,10 @@ class QuickTag:
         tags: GenericMetadata,
         interactive: bool,
         aggressive_filtering: bool,
+        *,
+        max_results: int,
     ) -> ID | None:
-        results = [r for r in results if r.id not in self.known_bad_ids.get(self.domain, set())]
-        if not results:
-            results = [r for r in display_results if r.id not in self.known_bad_ids.get(self.domain, set())]
+        results = self._eligible_candidates(results) or self._eligible_candidates(display_results)
         if not results:
             return None
         # we only return early if we don't have a series name or issue as get_mds will pull the full info if there is only one result
@@ -567,31 +528,21 @@ class QuickTag:
             self.output("Found a single match < 4. Assuming it's correct")
             return results[0].id
 
-        limited = limit(results, self.limit)
-        ids = {r.id for r in itertools.chain.from_iterable(limited)}
-
         matched_result = None
         # if we think we only have 1 result we try to optimize and only use a single request
         # otherwise we benefit from matching the filename against more matches
         if len(results) == 1:
-            matched_result = self.check_matches(results, tags)
+            matched_result = self.check_matches(results, tags, max_results=max_results)
         if matched_result is None:
-            matched_result = self.check_matches(display_results, tags)
+            matched_result = self.check_matches(display_results, tags, max_results=max_results)
         if matched_result is not None:
             return matched_result.id
         if not interactive:
             return None
 
-        limited_interactive = limit(
-            (r for r in display_results if r.id not in self.known_bad_ids.get(self.domain, set())), self.limit
-        )
-        ids_interactive = {r.id: r for r in itertools.chain.from_iterable(limited_interactive)}
-
-        mds_interactive = [(ids_interactive[ID(self.domain, md.issue_id)], md) for md in self.get_mds(ids_interactive)]  # type: ignore[arg-type]
-
-        interactive_only_ids = set(ids_interactive).difference(ids)
-
-        items = sorted(mds_interactive, key=lambda r: r[0].key)
+        interactive_candidates = self._candidate_index(display_results, max_results)
+        automatic_ids = self._candidate_index(results, max_results).keys()
+        items = sorted(self._candidate_metadata(interactive_candidates), key=lambda item: item[0].key)
         if not items:
             self.output("No results found for QuickTag")
             return None
@@ -602,7 +553,7 @@ class QuickTag:
             hashes, md = r
             self.output(
                 "{}{:2}. {:6} {!s} distance: {}({}) - {} #{} [{}] ({}/{}) - {}".format(
-                    " " if hashes.id in interactive_only_ids else "*",
+                    "*" if hashes.id in automatic_ids else " ",
                     counter,
                     hashes.id.ID,
                     hashes.distances,

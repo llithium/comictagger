@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import os
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from enum import Enum, auto
 from itertools import chain
 from typing import Any, Protocol
@@ -94,7 +94,9 @@ class LexerFunc(Protocol):
 
 
 class Lexer:
-    def __init__(self, string: str, allow_issue_start_with_letter: bool = False) -> None:
+    def __init__(
+        self, string: str, allow_issue_start_with_letter: bool = False, publisher_names: Iterable[str] = ()
+    ) -> None:
         self.input: str = string  # The string being scanned
         # The next lexing function to enter
         self.state: LexerFunc | None = None
@@ -106,6 +108,7 @@ class Lexer:
         self.sbrace_depth: int = 0  # Nesting depth of [ ]
         self.items: list[Item] = []
         self.allow_issue_start_with_letter = allow_issue_start_with_letter
+        self.publisher_names = frozenset(name.casefold() for name in publisher_names if " " not in name)
 
     # Next returns the next rune in the input.
     def get(self) -> str:
@@ -324,10 +327,13 @@ def lex_text(lex: Lexer) -> LexerFunc:
             lex.backup()
             word = lex.input[lex.start : lex.pos + 1]
 
-            if word.casefold() in key:
-                if key[word.casefold()] in (ItemType.Honorific, ItemType.InfoSpecifier):
+            kind = key.get(word.casefold())
+            if kind is not None:
+                if kind in (ItemType.Honorific, ItemType.InfoSpecifier):
                     lex.accept(".")
-                lex.emit(key[word.casefold()])
+                lex.emit(kind)
+            elif word.casefold() in lex.publisher_names:
+                lex.emit(ItemType.Publisher)
             elif cal(word):
                 lex.emit(ItemType.Calendar)
             else:
@@ -418,7 +424,7 @@ def is_symbol(character: str) -> bool:
     return unicodedata.category(character)[0] in "PS" and character != "."
 
 
-def Lex(filename: str, allow_issue_start_with_letter: bool = False) -> Lexer:
-    lex = Lexer(os.path.basename(filename), allow_issue_start_with_letter)
+def Lex(filename: str, allow_issue_start_with_letter: bool = False, publisher_names: Iterable[str] = ()) -> Lexer:
+    lex = Lexer(os.path.basename(filename), allow_issue_start_with_letter, publisher_names)
     lex.run()
     return lex

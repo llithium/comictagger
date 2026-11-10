@@ -67,6 +67,23 @@ class OnlineMatchResults:
     fetch_data_failures: list[Result] = dataclasses.field(default_factory=list)
     read_failures: list[Result] = dataclasses.field(default_factory=list)
 
+    def record(self, result: Result) -> None:
+        if result.status == Status.success and result.action == Action.save:
+            self.good_matches.append(result)
+        elif result.status == Status.read_failure:
+            self.read_failures.append(result)
+        elif result.status == Status.write_failure and result.action == Action.save:
+            self.write_failures.append(result)
+        elif result.status == Status.fetch_data_failure:
+            self.fetch_data_failures.append(result)
+        elif result.status == Status.match_failure:
+            if result.match_status == MatchStatus.no_match:
+                self.no_matches.append(result)
+            elif result.match_status == MatchStatus.multiple_match:
+                self.multiple_matches.append(result)
+            elif result.match_status == MatchStatus.low_confidence_match:
+                self.low_confidence_matches.append(result)
+
 
 @dataclasses.dataclass
 class Result:

@@ -19,71 +19,52 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-import os
 import platform
-import shlex
-import subprocess
+from collections.abc import Callable, Mapping
+from functools import partial
 
 import settngs
 
-from comicapi import comicarchive, utils
-from comicapi.comicarchive import tags
+from comicapi import utils
+from comicapi.tags import Tag
 from comictaggerlib import ctversion, quick_tag
 from comictaggerlib.ctsettings.settngs_namespace import SettngsNS as ct_ns
-from comictaggerlib.ctsettings.types import ComicTaggerPaths, tag
+from comictaggerlib.ctsettings.types import ComicTaggerPaths
 from comictaggerlib.resulttypes import Action
 
 logger = logging.getLogger(__name__)
 
 
-def initial_commandline_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(add_help=False)
-    # Ensure this stays up to date with register_runtime
-    parser.add_argument(
+def register_bootstrap_options(add_argument: Callable[..., object]) -> None:
+    add_argument(
         "--config",
         help="Config directory for ComicTagger to use.\ndefault: %(default)s\n\n",
         type=ComicTaggerPaths,
         default=ComicTaggerPaths(),
     )
-    parser.add_argument(
+    add_argument(
         "-v",
         "--verbose",
         action="count",
         default=0,
         help="Be noisy when doing what it does. Use a second time to enable debug logs.\nShort option cannot be combined with other options.",
     )
-    parser.add_argument(
+    add_argument(
         "--enable-quick-tag",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help='Enable the expiremental "quick tagger"',
+        help='Enable the experimental "quick tagger"',
     )
+
+
+def initial_commandline_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False)
+    register_bootstrap_options(parser.add_argument)
     return parser
 
 
-def register_runtime(parser: settngs.Manager) -> None:
-    parser.add_setting(
-        "--config",
-        help="Config directory for ComicTagger to use.\ndefault: %(default)s\n\n",
-        type=ComicTaggerPaths,
-        default=ComicTaggerPaths(),
-        file=False,
-    )
-    parser.add_setting(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="Be noisy when doing what it does. Use a second time to enable debug logs.\nShort option cannot be combined with other options.",
-        file=False,
-    )
-    parser.add_setting(
-        "--enable-quick-tag",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help='Enable the expiremental "quick tagger"',
-        file=False,
-    )
+def register_runtime(parser: settngs.Manager, parse_tag_ids: Callable[[str], list[str]], tag_metavar: str) -> None:
+    register_bootstrap_options(partial(parser.add_setting, file=False))
     parser.add_setting(
         "--enable-embedding-hashes",
         action=argparse.BooleanOptionalAction,
@@ -158,17 +139,17 @@ def register_runtime(parser: settngs.Manager) -> None:
     parser.add_setting(
         "-t",
         "--tags-read",
-        metavar=f"{{{','.join(tags).upper()}}}",
+        metavar=tag_metavar,
         default=[],
-        type=tag,
+        type=parse_tag_ids,
         help="""Specify the tags to read.\nUse commas for multiple tags.\nSee --list-plugins for the available tags.\nThe tags used will be 'overlaid' in order:\ne.g. '-t cbl,cr' with no CBL tags, CR will be used if they exist and CR will overwrite any shared CBL tags.\n\n""",
         file=False,
     )
     parser.add_setting(
         "--tags-write",
-        metavar=f"{{{','.join(tags).upper()}}}",
+        metavar=tag_metavar,
         default=[],
-        type=tag,
+        type=parse_tag_ids,
         help="""Specify the tags to write.\nUse commas for multiple tags.\nRead tags will be used if unspecified\nSee --list-plugins for the available tags.\n\n""",
         file=False,
     )
@@ -182,7 +163,7 @@ def register_runtime(parser: settngs.Manager) -> None:
     parser.add_setting("files", nargs="*", default=[], file=False)
 
 
-def register_commands(parser: settngs.Manager) -> None:
+def register_commands(parser: settngs.Manager, parse_tag_ids: Callable[[str], list[str]], tag_metavar: str) -> None:
     parser.add_setting("--version", action="store_true", help="Display version.", file=False)
 
     parser.add_setting(
@@ -207,9 +188,9 @@ def register_commands(parser: settngs.Manager) -> None:
     parser.add_setting(
         "-c",
         "--copy",
-        type=tag,
+        type=parse_tag_ids,
         default=[],
-        metavar=f"{{{','.join(tags).upper()}}}",
+        metavar=tag_metavar,
         help="Copy the specified source tags to\ndestination tags specified via --tags-write\n(potentially lossy operation).\n\n",
         file=False,
     )
@@ -259,14 +240,29 @@ def register_commands(parser: settngs.Manager) -> None:
     )
 
 
-def register_commandline_settings(parser: settngs.Manager, enable_quick_tag: bool) -> None:
-    parser.add_group("Commands", register_commands, True)
-    parser.add_persistent_group("Runtime Options", register_runtime)
+def register_commandline_settings(parser: settngs.Manager, enable_quick_tag: bool, tags: Mapping[str, Tag]) -> None:
+    def parse_tag_ids(value: str) -> list[str]:
+        enabled_tags = {key: tag.id for key, tag in tags.items() if tag.enabled}
+        result = []
+        for key in utils.split(value.casefold(), ","):
+            if key not in enabled_tags:
+                choices = ", ".join(enabled_tags).upper()
+                raise argparse.ArgumentTypeError(f"invalid choice: {key} (choose from {choices})")
+            result.append(enabled_tags[key])
+        return result
+
+    tag_metavar = f"{{{','.join(tags).upper()}}}"
+    parser.add_group("Commands", partial(register_commands, parse_tag_ids=parse_tag_ids, tag_metavar=tag_metavar), True)
+    parser.add_persistent_group(
+        "Runtime Options", partial(register_runtime, parse_tag_ids=parse_tag_ids, tag_metavar=tag_metavar)
+    )
     if enable_quick_tag:
         parser.add_group("Quick Tag", quick_tag.settings)
 
 
-def validate_commandline_settings(config: settngs.Config[ct_ns], parser: settngs.Manager) -> settngs.Config[ct_ns]:
+def validate_commandline_settings(
+    config: settngs.Config[ct_ns], parser: settngs.Manager, tags: Mapping[str, Tag]
+) -> settngs.Config[ct_ns]:
     if config[0].Commands__version:
         parser.exit(
             status=1,
@@ -274,14 +270,10 @@ def validate_commandline_settings(config: settngs.Config[ct_ns], parser: settngs
             + "Distributed under Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)\n",
         )
 
-    enabled_tags = {tag for tag in comicarchive.tags if comicarchive.tags[tag].enabled}
-    if (
-        (not config[0].Metadata_Options__cr)
-        and "cr" in comicarchive.tags
-        and comicarchive.tags["cr"].enabled
-        and len(enabled_tags) > 1
-    ):
-        comicarchive.tags["cr"].enabled = False
+    enabled_tags = {key for key, tag in tags.items() if tag.enabled}
+    if not config[0].Metadata_Options__cr and "cr" in enabled_tags and len(enabled_tags) > 1:
+        tags["cr"].enabled = False
+        enabled_tags.remove("cr")
 
     config[0].Runtime_Options__no_gui = any(
         (config[0].Commands__command != Action.gui, config[0].Runtime_Options__no_gui, config[0].Commands__copy)
@@ -302,7 +294,7 @@ def validate_commandline_settings(config: settngs.Config[ct_ns], parser: settngs
     if config[0].Runtime_Options__tags_read and not config[0].Runtime_Options__tags_write:
         config[0].Runtime_Options__tags_write = config[0].Runtime_Options__tags_read
 
-    disabled_tags = {tag for tag in comicarchive.tags if not comicarchive.tags[tag].enabled}
+    disabled_tags = tags.keys() - enabled_tags
     to_be_removed = (
         set(config[0].Runtime_Options__tags_read)
         .union(config[0].Runtime_Options__tags_write)
@@ -317,11 +309,7 @@ def validate_commandline_settings(config: settngs.Config[ct_ns], parser: settngs
             tag for tag in config[0].Runtime_Options__tags_write if tag not in to_be_removed
         ]
 
-    if (
-        config[0].Runtime_Options__no_gui
-        and not [tag.id for tag in tags.values() if tag.enabled]
-        and config[0].Commands__command != Action.list_plugins
-    ):
+    if config[0].Runtime_Options__no_gui and not enabled_tags and config[0].Commands__command != Action.list_plugins:
         parser.exit(status=1, message="There are no tags enabled see --list-plugins\n")
 
     if config[0].Runtime_Options__no_gui and not config[0].Runtime_Options__files:
@@ -350,26 +338,5 @@ def validate_commandline_settings(config: settngs.Config[ct_ns], parser: settngs
 
     if not config[0].Runtime_Options__enable_embedding_hashes:
         config[0].Runtime_Options__preferred_hash = ""
-
-    # take a crack at finding rar exe if it's not in the path
-    if not utils.which("rar"):
-        if platform.system() == "Windows":
-            letters = ["C"]
-            letters.extend({f"{d}" for d in "CD" if os.path.exists(f"{d}:\\")})
-            for letter in letters:
-                # look in some likely places for Windows machines
-                utils.add_to_path(rf"{letter}:\Program Files\WinRAR")
-                utils.add_to_path(rf"{letter}:\Program Files (x86)\WinRAR")
-        else:
-            if platform.system() == "Darwin":
-                result = subprocess.run(("/usr/libexec/path_helper", "-s"), capture_output=True)
-                for path in reversed(
-                    shlex.split(result.stdout.decode("utf-8", errors="ignore"))[0]
-                    .partition("=")[2]
-                    .rstrip(";")
-                    .split(os.pathsep)
-                ):
-                    utils.add_to_path(path)
-            utils.add_to_path("/opt/homebrew/bin")
 
     return config

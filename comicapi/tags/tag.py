@@ -39,7 +39,7 @@ class Tag:
             "year",
             "language",
             "country",
-            "web_link",
+            "web_links",
             "format",
             "manga",
             "black_and_white",

@@ -16,54 +16,27 @@
 # limitations under the License.
 from __future__ import annotations
 
-import logging
-
 from PyQt6 import QtCore
 
 from comicapi.comicarchive import ComicArchive
 
-logger = logging.getLogger(__name__)
 
-
-class PageLoader(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
-    """
-    This class holds onto a reference of each instance in a list since
-    problems occur if the ref count goes to zero and the GC tries to reap
-    the object while the thread is going.
-    If the client class wants to stop the thread, they should mark it as
-    "abandoned", and no signals will be issued.
-    """
-
+class PageLoader(QtCore.QThread):
     loadComplete = QtCore.pyqtSignal(bytes)
-
-    instanceList: list[QtCore.QThread] = []
-    mutex = QtCore.QMutex()
-
-    # Remove all finished threads from the list
-    @staticmethod
-    def reap_instances() -> None:
-        for obj in reversed(PageLoader.instanceList):
-            if obj.isFinished():
-                PageLoader.instanceList.remove(obj)
+    # Qt aborts if a running QThread loses its last reference.
+    _active: set[PageLoader] = set()
 
     def __init__(self, ca: ComicArchive, page_num: int) -> None:
-        QtCore.QThread.__init__(self)
+        super().__init__()
         self.ca: ComicArchive = ca
         self.page_num: int = page_num
-        self.abandoned = False
-
-        # remove any old instances, and then add ourself
-        PageLoader.mutex.lock()
-        PageLoader.reap_instances()
-        PageLoader.instanceList.append(self)
-        PageLoader.mutex.unlock()
+        self._active.add(self)
+        self.finished.connect(self._release)
 
     def run(self) -> None:
-        image_data = self.ca.get_page(self.page_num)
-        if self.abandoned:
-            return
+        self.loadComplete.emit(self.ca.get_page(self.page_num))
 
-        if image_data:
-            if self.abandoned:
-                return
-            self.loadComplete.emit(image_data)
+    @QtCore.pyqtSlot()
+    def _release(self) -> None:
+        self._active.discard(self)
+        self.deleteLater()

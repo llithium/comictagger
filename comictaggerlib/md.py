@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 
 from comicapi import merge, utils
@@ -60,3 +61,31 @@ def read_selected_tags(
         error = e
 
     return md, tags_used, error
+
+
+def read_configured_tags(
+    ca: ComicArchive, tag_ids: list[str], config: SettngsNS
+) -> tuple[GenericMetadata, list[str], Exception | None]:
+    return read_selected_tags(tag_ids, ca, config.Metadata_Options__tag_merge, config.Metadata_Options__tag_merge_lists)
+
+
+def parse_archive_filename(ca: ComicArchive, config: SettngsNS, *, split_words: bool | None = None) -> GenericMetadata:
+    return ca.metadata_from_filename(
+        parser=config.Filename_Parsing__filename_parser,
+        remove_c2c=config.Filename_Parsing__remove_c2c,
+        remove_fcbd=config.Filename_Parsing__remove_fcbd,
+        remove_publisher=config.Filename_Parsing__remove_publisher,
+        split_words=config.Filename_Parsing__split_words if split_words is None else split_words,
+        allow_issue_start_with_letter=config.Filename_Parsing__allow_issue_start_with_letter,
+        protofolius_issue_number_scheme=config.Filename_Parsing__protofolius_issue_number_scheme,
+        publisher_names=utils.publishers,
+    )
+
+
+def write_selected_tags(ca: ComicArchive, md: GenericMetadata, tag_ids: Iterable[str]) -> tuple[list[str], str | None]:
+    written: list[str] = []
+    for tag_id in tag_ids:
+        if not ca.write_tags(md, tag_id):
+            return written, tag_id
+        written.append(tag_id)
+    return written, None

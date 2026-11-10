@@ -9,21 +9,44 @@ import comicapi.genericmetadata
 import testing.comicvine
 from comictalker.comiccacher import Issue, Series
 from comictalker.comictalker import TalkerDataError
+from comictalker.talkers.comicvine import ComicVineTalker
 
 
-def test_search_for_series(comicvine_api, comic_cache):
-    results = comicvine_api.search_for_series(
-        "cory doctorows futuristic tales of the here and now", on_rate_limit=None
-    )[0]
-    cache_series = comic_cache.get_search_results(
-        comicvine_api.id,
-        "cory doctorows futuristic tales of the here and now",
-    )[0][0]
-    assert json.loads(cache_series.data)["id"] == 23437
+def test_search_reports_a_malformed_response_as_a_talker_error(comicvine_api, monkeypatch):
+    monkeypatch.setattr(comicvine_api, "_get_url_content", lambda *args, **kwargs: {})
+
+    with pytest.raises(TalkerDataError, match="did not return a response status"):
+        comicvine_api.search_for_series("Some series")
+
+
+def test_search_for_series(comicvine_api, cv_requests_get):
+    name = "cory doctorows futuristic tales of the here and now"
+    results = comicvine_api.search_for_series(name, on_rate_limit=None)[0]
     assert results.id == "23437"
     assert results.name == "Cory Doctorow's Futuristic Tales of the Here and Now"
     assert results.count_of_issues == 1
     assert results.start_year == 2007
+    assert comicvine_api.search_for_series(name, on_rate_limit=None) == [results]
+    assert cv_requests_get.call_count == 1
+    assert comicvine_api.search_for_series(name, series_match_thresh=95, on_rate_limit=None) == [results]
+    assert cv_requests_get.call_count == 2
+
+
+def test_literal_search_does_not_replace_cached_relevance_results(comicvine_api, monkeypatch):
+    first = deepcopy(testing.comicvine.cv_volume_result)
+    first["results"] = [first["results"]]
+    second = deepcopy(first)
+    second["results"][0]["id"] = 5678
+    responses = iter([first, second])
+    monkeypatch.setattr(comicvine_api, "_get_cv_content", lambda *args, **kwargs: next(responses))
+
+    first_result = comicvine_api.search_for_series("comics")
+    literal_result = comicvine_api.search_for_series("comics", literal=True)
+    cached_result = comicvine_api.search_for_series("comics")
+
+    assert [series.id for series in first_result] == ["23437"]
+    assert [series.id for series in literal_result] == ["5678"]
+    assert cached_result == first_result
 
 
 def test_search_for_series_stops_on_empty_page(comicvine_api, monkeypatch):
@@ -90,6 +113,17 @@ def test_fetch_series(comicvine_api, comic_cache):
     assert comicvine_api.fetch_series(23437) == result
 
 
+def test_interleaved_versions_do_not_reset_the_cache_on_each_lookup(comicvine_api, cv_requests_get):
+    other = ComicVineTalker(comicvine_api.version + ".next", comicvine_api.cache_folder)
+    assert comicvine_api.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert other.fetch_series(23437) == testing.comicvine.comic_series_result
+    calls_after_both_opened = cv_requests_get.call_count
+
+    assert comicvine_api.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert other.fetch_series(23437) == testing.comicvine.comic_series_result
+    assert cv_requests_get.call_count == calls_after_both_opened
+
+
 def test_fetch_issues_in_series(comicvine_api, comic_cache):
     results = comicvine_api.fetch_issues_in_series(23437)
     cache_issues = comic_cache.get_series_issues_info(23437, comicvine_api.id)
@@ -148,6 +182,19 @@ def test_cached_comic_vine_issue_uses_cached_series_start_year(comicvine_api, co
     assert cv_requests_get.call_count == 0
 
 
+def test_bulk_fetch_handles_missing_ids_across_multiple_batches(comicvine_api, monkeypatch):
+    filters = []
+
+    def fetch_empty_page(url, params, *, on_rate_limit):
+        filters.append(params["filter"])
+        return {"number_of_page_results": 0, "number_of_total_results": 0, "results": []}
+
+    monkeypatch.setattr(comicvine_api, "_get_cv_content", fetch_empty_page)
+
+    assert comicvine_api.fetch_comics(issue_ids=[str(i) for i in range(101)]) == []
+    assert [len(query.removeprefix("id:").split("|")) for query in filters] == [100, 1]
+
+
 def test_fetch_issue_data_by_issue_id(comicvine_api):
     result = comicvine_api.fetch_comic_data(140529, on_rate_limit=None)
     result.notes = None
@@ -173,6 +220,11 @@ def test_fetch_issues_in_series_issue_num_and_year(comicvine_api, cv_requests_ge
 
     assert not results
     assert cv_requests_get.call_count == 2  # verify negative caching works
+
+    results = comicvine_api.fetch_issues_by_series_issue_num_and_year([23437], "1", 2026)
+
+    assert not results
+    assert cv_requests_get.call_count == 2
 
 
 cv_issue = [

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from time import monotonic
-from typing import Any
-
-from comictalker.comictalker import RLCallBack
+from typing import TYPE_CHECKING, Any
 
 from .bucket import AbstractBucket, MemoryQueueBucket
 from .exceptions import BucketFullException, InvalidParams
 from .limit_context_decorator import LimitContextDecorator
 from .request_rate import RequestRate
+
+if TYPE_CHECKING:
+    from comictalker.comictalker import RLCallBack
 
 
 class Limiter:

@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import ctypes
+import errno
+import os
 import pathlib
-from collections.abc import Callable, Collection
-from contextlib import AbstractContextManager, nullcontext
+import stat
+import sys
+import tempfile
+from collections.abc import Callable, Collection, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+from comicapi.utils import file_name_candidates
 
 
 @runtime_checkable
@@ -166,3 +175,140 @@ def read_archive(archive: Archiver) -> AbstractContextManager[Callable[[str], by
     if isinstance(archive, ReadSessionArchiver):
         return archive.read_session()
     return nullcontext(archive.read_file)
+
+
+def member_destination(root: pathlib.Path, name: str) -> pathlib.Path:
+    root = root.resolve()
+    destination = (root / name).resolve()
+    if destination == root or not destination.is_relative_to(root):
+        raise ValueError(f"Archive member escapes destination: {name!r}")
+    return destination
+
+
+def _rename_exclusive(source: pathlib.Path, target: pathlib.Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    args: tuple[int | bytes, ...]
+    try:
+        if sys.platform == "darwin":
+            rename = libc.renamex_np
+            rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            args = (os.fsencode(source), os.fsencode(target), 0x4)  # RENAME_EXCL
+        elif sys.platform == "linux":
+            rename = libc.renameat2
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            at_fdcwd = -100
+            args = (at_fdcwd, os.fsencode(source), at_fdcwd, os.fsencode(target), 1)  # RENAME_NOREPLACE
+        else:
+            raise AttributeError("exclusive rename")
+    except AttributeError:
+        raise OSError(errno.ENOSYS, "Exclusive rename is unavailable", target) from None
+
+    rename.restype = ctypes.c_int
+    if rename(*args) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), target)
+
+
+_EXCLUSIVE_UNSUPPORTED = (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL)
+
+
+class ArchiveExportCollision(FileExistsError):
+    """The requested export destination is occupied at publication."""
+
+
+def _publish_at_path(staged: pathlib.Path, path: pathlib.Path) -> None:
+    if os.name == "nt":
+        staged.rename(path)
+        return
+
+    try:
+        os.link(staged, path)
+    except OSError as error:
+        # FAT drivers can also report EPERM when hard links are unsupported.
+        if error.errno not in (*_EXCLUSIVE_UNSUPPORTED, errno.EPERM):
+            raise
+        _rename_exclusive(staged, path)
+
+
+def _publish_export_folder(staged: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="ComicTagger-export-", dir=path.parent))
+    named_archive = staged.with_name(path.name)
+    try:
+        if named_archive != staged:
+            staged.rename(named_archive)
+        # A directory rename can only replace an empty directory. The finished
+        # CBZ becomes visible inside it in one step.
+        staged.parent.replace(folder)
+    except OSError:
+        with suppress(OSError):
+            folder.rmdir()
+        raise
+    return folder / path.name
+
+
+def _copy_macos_acl(source: pathlib.Path, target: pathlib.Path) -> None:
+    copyfile = ctypes.CDLL(None, use_errno=True).copyfile
+    copyfile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+    copyfile.restype = ctypes.c_int
+    if copyfile(os.fsencode(source), os.fsencode(target), None, 1) != 0:  # COPYFILE_ACL
+        code = ctypes.get_errno()
+        if code not in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise OSError(code, os.strerror(code), source)
+
+
+def _publish_new_archive(
+    staged: pathlib.Path, path: pathlib.Path, *, allow_export_folder: bool, unique: bool
+) -> pathlib.Path:
+    candidates = file_name_candidates(path)
+    while True:
+        candidate = next(candidates)
+        try:
+            _publish_at_path(staged, candidate)
+        except FileExistsError as error:
+            if not unique:
+                raise ArchiveExportCollision(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from error
+        except OSError as error:
+            if not allow_export_folder or os.name == "nt" or error.errno not in _EXCLUSIVE_UNSUPPORTED:
+                raise
+            if not os.path.lexists(candidate):
+                return _publish_export_folder(staged, candidate)
+            if not unique:
+                raise ArchiveExportCollision(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from None
+        else:
+            return candidate
+
+
+@dataclass
+class ArchiveReplacement:
+    staged: pathlib.Path
+    published: pathlib.Path | None = None
+
+
+@contextmanager
+def archive_replacement(
+    path: pathlib.Path, *, overwrite: bool = True, allow_export_folder: bool = False, unique: bool = False
+) -> Iterator[ArchiveReplacement]:
+    """Publish a closed, complete archive when the writer finishes successfully."""
+    mode = None
+    if overwrite:
+        with suppress(FileNotFoundError):
+            mode = stat.S_IMODE(path.stat().st_mode)
+    with tempfile.TemporaryDirectory(dir=path.parent) as directory:
+        staging = pathlib.Path(directory)
+        if allow_export_folder:
+            # The outer directory keeps the staged file private until publication.
+            # The inner directory takes its permissions from the user's umask.
+            staging = staging / "export"
+            staging.mkdir()
+        replacement = ArchiveReplacement(staging / path.name)
+        yield replacement
+        if overwrite:
+            if mode is not None:
+                replacement.staged.chmod(mode)
+                if sys.platform == "darwin":
+                    _copy_macos_acl(path, replacement.staged)
+            replacement.published = replacement.staged.replace(path)
+        else:
+            replacement.published = _publish_new_archive(
+                replacement.staged, path, allow_export_folder=allow_export_folder, unique=unique
+            )

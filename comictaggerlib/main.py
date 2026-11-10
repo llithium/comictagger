@@ -23,20 +23,21 @@ import locale
 import logging
 import logging.handlers
 import os
+import pathlib
+import shlex
 import signal
 import subprocess
 import sys
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from typing import cast
 
 import settngs
 
 import comicapi.comicarchive
-import comicapi.filenamelexer
 import comicapi.utils
 import comictalker
 from comictaggerlib import cli, ctsettings, pillow_plugins
-from comictaggerlib.ctsettings import ct_ns, plugin_finder
+from comictaggerlib.ctsettings import ComicTaggerPaths, ct_ns, plugin_finder
 from comictaggerlib.ctversion import version
 from comictaggerlib.log import setup_logging
 from comictaggerlib.resulttypes import Action
@@ -46,47 +47,23 @@ logger = logging.getLogger("comictagger")
 
 
 logger.setLevel(logging.DEBUG)
-assert pillow_plugins
 
 
 def _lang_code_mac() -> str:
-    """
-    stolen from https://github.com/mu-editor/mu
-    Returns the user's language preference as defined in the Language & Region
-    preference pane in macOS's System Preferences.
-    """
-
-    # Uses the shell command `defaults read -g AppleLocale` that prints out a
-    # language code to standard output. Assumptions about the command:
-    # - It exists and is in the shell's PATH.
-    # - It accepts those arguments.
-    # - It returns a usable language code.
-    #
-    # Reference documentation:
-    # - The man page for the `defaults` command on macOS.
-    # - The macOS underlying API:
-    #   https://developer.apple.com/documentation/foundation/nsuserdefaults.
-
-    lang_detect_command = "defaults read -g AppleLocale"
-
-    status, output = subprocess.getstatusoutput(lang_detect_command)
+    # Adapted from https://github.com/mu-editor/mu for GUI launches without LANG.
+    status, output = subprocess.getstatusoutput("defaults read -g AppleLocale")
     if status == 0:
-        # Command was successful.
-        lang_code = output
-    else:
-        logger.warning("Language detection command failed: %r", output)
-        lang_code = ""
-
-    return lang_code
+        return output
+    logger.warning("Language detection command failed: %r", output)
+    return ""
 
 
 def configure_locale() -> None:
     if sys.platform == "darwin" and "LANG" not in os.environ:
         code = _lang_code_mac()
-        if code != "":
+        if code:
             os.environ["LANG"] = f"{code}.utf-8"
 
-    # Get locale settings from OS, fall back to en_US or C in case of error for minimalist or misconfigured systems
     try:
         locale.setlocale(locale.LC_ALL, "")
     except locale.Error:
@@ -95,6 +72,27 @@ def configure_locale() -> None:
     sys.stdout.reconfigure(encoding=sys.getdefaultencoding())  # type: ignore[union-attr]
     sys.stderr.reconfigure(encoding=sys.getdefaultencoding())  # type: ignore[union-attr]
     sys.stdin.reconfigure(encoding=sys.getdefaultencoding())  # type: ignore[union-attr]
+
+
+def configure_rar_search_path() -> None:
+    if comicapi.utils.which("rar"):
+        return
+    if sys.platform == "win32":
+        drives = ("C", "D") if pathlib.Path("D:/").exists() else ("C",)
+        for drive in drives:
+            comicapi.utils.add_to_path(rf"{drive}:\Program Files\WinRAR")
+            comicapi.utils.add_to_path(rf"{drive}:\Program Files (x86)\WinRAR")
+        return
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(("/usr/libexec/path_helper", "-s"), capture_output=True, text=True, check=True)
+            tokens = shlex.split(result.stdout)
+            if tokens and tokens[0].startswith("PATH="):
+                for directory in reversed(tokens[0].removeprefix("PATH=").rstrip(";").split(os.pathsep)):
+                    comicapi.utils.add_to_path(directory)
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            logger.debug("Could not read the system search path", exc_info=True)
+        comicapi.utils.add_to_path("/opt/homebrew/bin")
 
 
 def update_publishers(config: settngs.Config[ct_ns]) -> None:
@@ -107,44 +105,34 @@ def update_publishers(config: settngs.Config[ct_ns]) -> None:
 
 
 class App:
-    """docstring for App"""
-
     def __init__(self) -> None:
         self.config: settngs.Config[ct_ns]
-        self.initial_arg_parser = ctsettings.initial_commandline_parser()
         self.config_load_success = False
-        self.talkers: dict[str, ComicTalker]
+        self.talkers: dict[str, ComicTalker] = {}
         self.metron_location = ""
 
     def run(self) -> None:
         configure_locale()
+        pillow_plugins.register()
         conf = self.initialize()
         self.initialize_dirs(conf.config)
         self.load_plugins(conf)
         self.register_settings(conf.enable_quick_tag)
         self.config = self.parse_settings(conf.config)
+        configure_rar_search_path()
 
         self.main()
 
     def load_plugins(self, opts: argparse.Namespace) -> None:
         local_plugins = plugin_finder.find_plugins(opts.config.user_plugin_dir)
 
-        for talker in local_plugins.talkers.copy():
-            if (
-                talker.entry_name == "metron"
-                or "metron" in talker.obj.website.casefold()
-                or "metron" in talker.obj.__module__.casefold()
-            ):
-                self.metron_location = f"Local package {str(talker.plugin.path.absolute())}"
-                local_plugins.talkers.remove(talker)
-                continue
-
-        comicapi.comicarchive.load_archive_plugins(local_plugins=[p.obj for p in local_plugins.archivers])
-        comicapi.comicarchive.load_tag_plugins(version=version, local_plugins=[p.obj for p in local_plugins.tags])
-        self.talkers, metron_location = comictalker.get_talkers(
-            version, opts.config.user_cache_dir, local_plugins=[p.obj for p in local_plugins.talkers]
+        comicapi.comicarchive.load_archive_plugins(local_plugins=[p.implementation for p in local_plugins.archivers])
+        comicapi.comicarchive.load_tag_plugins(
+            version=version, local_plugins=[p.implementation for p in local_plugins.tags]
         )
-        self.metron_location = metron_location or self.metron_location
+        self.talkers, self.metron_location = comictalker.get_talkers(
+            version, opts.config.user_cache_dir, local_plugins=local_plugins.talkers
+        )
 
     def list_plugins(
         self,
@@ -152,101 +140,77 @@ class App:
         archivers: Collection[type[comicapi.comicarchive.Archiver]],
         tags: Collection[comicapi.comicarchive.Tag],
     ) -> None:
-        if self.config[0].Runtime_Options__json:
-            for talker in talkers:
-                print(  # noqa: T201
-                    json.dumps(
-                        {
-                            "type": "talker",
-                            "id": talker.id,
-                            "name": talker.name,
-                            "website": talker.website,
-                        }
-                    )
-                )
+        def show(title: str, row_format: str, rows: Iterable[dict[str, str | bool]]) -> None:
+            if not self.config[0].Runtime_Options__json:
+                print(title)  # noqa: T201
+            for row in rows:
+                if self.config[0].Runtime_Options__json:
+                    print(json.dumps(row))  # noqa: T201
+                else:
+                    print(row_format.format_map(row))  # noqa: T201
 
+        def archive_rows() -> Iterable[dict[str, str | bool]]:
             for archiver in archivers:
                 try:
-                    a = archiver()
-                    print(  # noqa: T201
-                        json.dumps(
-                            {
-                                "type": "archiver",
-                                "enabled": a.enabled,
-                                "name": a.name(),
-                                "extension": a.extension(),
-                                "exe": a.exe,
-                            }
-                        )
+                    archive = archiver()
+                    enabled, name, extension, executable = (
+                        archive.enabled,
+                        archive.name(),
+                        archive.extension(),
+                        archive.exe,
                     )
                 except Exception:
-                    print(  # noqa: T201
-                        json.dumps(
-                            {
-                                "type": "archiver",
-                                "enabled": archiver.enabled,
-                                "name": "",
-                                "extension": "",
-                                "exe": archiver.exe,
-                            }
-                        )
-                    )
+                    logger.exception("Failed to inspect archive plugin: %s", archiver)
+                    enabled, name, extension, executable = archiver.enabled, "", "", archiver.exe
+                yield {"type": "archiver", "enabled": enabled, "name": name, "extension": extension, "exe": executable}
 
-            for tag in tags:
-                print(  # noqa: T201
-                    json.dumps(
-                        {
-                            "type": "tag",
-                            "enabled": tag.enabled,
-                            "name": tag.name(),
-                            "id": tag.id,
-                        }
-                    )
-                )
-        else:
-            print("Metadata Sources: (ID: Name, URL)")  # noqa: T201
-            for talker in talkers:
-                print(f"{talker.id:<10}: {talker.name:<21}, {talker.website}")  # noqa: T201
-
-            print("\nComic Archive: (Enabled, Name: extension, exe)")  # noqa: T201
-            for archiver in archivers:
-                a = archiver()
-                print(f"{a.enabled!s:<5}, {a.name():<10}: {a.extension():<5}, {a.exe}")  # noqa: T201
-
-            print("\nTags: (Enabled, ID: Name)")  # noqa: T201
-            for tag in tags:
-                print(f"{tag.enabled!s:<5}, {tag.id:<10}: {tag.name()}")  # noqa: T201
+        show(
+            "Metadata Sources: (ID: Name, URL)",
+            "{id:<10}: {name:<21}, {website}",
+            ({"type": "talker", "id": talker.id, "name": talker.name, "website": talker.website} for talker in talkers),
+        )
+        show(
+            "\nComic Archive: (Enabled, Name: extension, exe)",
+            "{enabled!s:<5}, {name:<10}: {extension:<5}, {exe}",
+            archive_rows(),
+        )
+        show(
+            "\nTags: (Enabled, ID: Name)",
+            "{enabled!s:<5}, {id:<10}: {name}",
+            ({"type": "tag", "enabled": tag.enabled, "name": tag.name(), "id": tag.id} for tag in tags),
+        )
 
     def initialize(self) -> argparse.Namespace:
-        conf, _ = self.initial_arg_parser.parse_known_intermixed_args()
-
-        assert conf is not None
+        conf, _ = ctsettings.initial_commandline_parser().parse_known_intermixed_args()
         setup_logging(conf.verbose, conf.config.user_log_dir)
         return conf
 
     def register_settings(self, enable_quick_tag: bool) -> None:
-        self.manager = settngs.Manager(
-            description="A utility for reading and writing metadata to comic archives.\n\n\n"
-            + "If no options are given, %(prog)s will run in windowed mode.\nPlease keep the '-v' option separated '-so -v' not '-sov'",
-            epilog="For more help visit the wiki at: https://github.com/comictagger/comictagger/wiki",
+        self.archiver_executables = {
+            archiver: ctsettings.plugin.archiver_executable(archiver)
+            for archiver in comicapi.comicarchive.archivers
+            if archiver.exe
+        }
+        self.manager = ctsettings.create_manager(
+            enable_quick_tag=enable_quick_tag,
+            archiver_executables=self.archiver_executables,
+            tags=comicapi.comicarchive.tags,
+            talkers=self.talkers,
         )
-        ctsettings.register_commandline_settings(self.manager, enable_quick_tag)
-        ctsettings.register_file_settings(self.manager)
-        ctsettings.register_plugin_settings(self.manager, getattr(self, "talkers", {}))
 
-    def parse_settings(self, config_paths: ctsettings.ComicTaggerPaths, *args: str) -> settngs.Config[ct_ns]:
+    def parse_settings(self, config_paths: ComicTaggerPaths, *args: str) -> settngs.Config[ct_ns]:
         cfg, self.config_load_success = ctsettings.parse_config(
-            self.manager, config_paths.user_config_dir / "settings.json", list(args) or None
+            self.manager, config_paths.settings_file, list(args) or None
         )
         config = cast(settngs.Config[ct_ns], self.manager.get_namespace(cfg, file=True, cmdline=True))
         config[0].Runtime_Options__config = config_paths
 
-        config = ctsettings.validate_commandline_settings(config, self.manager)
+        config = ctsettings.validate_commandline_settings(config, self.manager, comicapi.comicarchive.tags)
         config = ctsettings.validate_file_settings(config)
-        config = ctsettings.validate_plugin_settings(config, getattr(self, "talkers", {}))
-        return config
+        ctsettings.apply_archive_settings(config, self.archiver_executables)
+        return ctsettings.validate_talker_settings(config, self.talkers)
 
-    def initialize_dirs(self, paths: ctsettings.ComicTaggerPaths) -> None:
+    def initialize_dirs(self, paths: ComicTaggerPaths) -> None:
         paths.user_config_dir.mkdir(parents=True, exist_ok=True)
         paths.user_cache_dir.mkdir(parents=True, exist_ok=True)
         paths.user_log_dir.mkdir(parents=True, exist_ok=True)
@@ -257,8 +221,6 @@ class App:
         logger.debug("user_plugin_dir: %s", paths.user_plugin_dir)
 
     def main(self) -> None:
-        assert self.config is not None
-        # config already loaded
         error = None
 
         if not self.talkers:
@@ -278,13 +240,6 @@ class App:
         comicapi.utils.load_publishers()
         update_publishers(self.config)
 
-        def add_publisher_to_lexer(publisher: str) -> None:
-            publisher = publisher.casefold()
-            if " " not in publisher and publisher not in comicapi.filenamelexer.key:
-                comicapi.filenamelexer.key[publisher] = comicapi.filenamelexer.ItemType.Publisher
-
-        for publisher in comicapi.utils.publishers:
-            add_publisher_to_lexer(publisher)
         if self.config[0].Commands__command == Action.list_plugins:
             self.list_plugins(
                 list(self.talkers.values()),
@@ -294,7 +249,7 @@ class App:
             return
 
         if self.config[0].Commands__command == Action.save_config and self.config_load_success:
-            settings_path = self.config[0].Runtime_Options__config.user_config_dir / "settings.json"
+            settings_path = self.config[0].Runtime_Options__config.settings_file
             if not ctsettings.save_file(self.config, settings_path):
                 raise SystemExit(1)
             print("Settings saved")  # noqa: T201
@@ -331,7 +286,6 @@ class App:
                 True,
             )
             raise SystemExit(9)
-        # GUI mode is not available or CLI mode was requested
         if error and error[1]:
             print(f"A fatal error occurred please check the log for more information: {error[0]}")  # noqa: T201
             raise SystemExit(1)

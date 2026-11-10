@@ -18,43 +18,46 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import NamedTuple
+from dataclasses import dataclass
 
-from PyQt6 import QtCore, QtGui, QtWidgets, uic
+from PyQt6 import QtCore, QtWidgets, uic
 
 from comicapi.genericmetadata import GenericMetadata
-from comictaggerlib.ctsettings import ct_ns, settngs_namespace
-from comictaggerlib.ui import ui_path
+from comictaggerlib.ctsettings import ct_ns
+from comictaggerlib.ui import qtutils, ui_path
 
 logger = logging.getLogger(__name__)
 
 
-class AutoTagSettings(NamedTuple):
-    settings: settngs_namespace.Auto_Tag
+@dataclass(frozen=True)
+class AutoTagSettings:
     remove_after_success: bool
-    series_match_identify_thresh: bool
+    series_match_identify_thresh: int
     split_words: bool
     search_string: str
+    save_on_low_confidence: bool
+    use_year_when_identifying: bool
+    assume_issue_one: bool
+    ignore_leading_numbers_in_filename: bool
+    clear_tags: bool
+    auto_imprint: bool
+
+    def save_preferences(self, config: ct_ns) -> None:
+        config.internal__remove_archive_after_successful_match = self.remove_after_success
+        config.Auto_Tag__save_on_low_confidence = self.save_on_low_confidence
+        config.Auto_Tag__use_year_when_identifying = self.use_year_when_identifying
+        config.Auto_Tag__assume_issue_one = self.assume_issue_one
+        config.Auto_Tag__ignore_leading_numbers_in_filename = self.ignore_leading_numbers_in_filename
+        config.Auto_Tag__clear_tags = self.clear_tags
 
     def new_settings(self, config: ct_ns) -> ct_ns:
         new = copy.copy(config)
-        new.internal__remove_archive_after_successful_match = self.remove_after_success
+        self.save_preferences(new)
         new.Issue_Identifier__series_match_identify_thresh = self.series_match_identify_thresh
         new.Filename_Parsing__split_words = self.split_words
-        new.Auto_Tag__online = self.settings["online"]
-        new.Auto_Tag__save_on_low_confidence = self.settings["save_on_low_confidence"]
-        new.Auto_Tag__use_year_when_identifying = self.settings["use_year_when_identifying"]
-        new.Auto_Tag__assume_issue_one = self.settings["assume_issue_one"]
-        new.Auto_Tag__ignore_leading_numbers_in_filename = self.settings["ignore_leading_numbers_in_filename"]
-        new.Auto_Tag__parse_filename = self.settings["parse_filename"]
-        new.Auto_Tag__prefer_filename = self.settings["prefer_filename"]
-        new.Auto_Tag__issue_id = self.settings["issue_id"]
-        new.Auto_Tag__metadata = self.settings["metadata"]
-        new.Auto_Tag__clear_tags = self.settings["clear_tags"]
-        new.Auto_Tag__publisher_filter = self.settings["publisher_filter"]
-        new.Auto_Tag__use_publisher_filter = self.settings["use_publisher_filter"]
-        new.Auto_Tag__auto_imprint = self.settings["auto_imprint"]
-
+        new.Auto_Tag__issue_id = None
+        new.Auto_Tag__metadata = GenericMetadata()
+        new.Auto_Tag__auto_imprint = self.auto_imprint
         return new
 
 
@@ -104,26 +107,9 @@ class AutoTagStartWindow(QtWidgets.QDialog):
 
         self.cbxSpecifySearchString.stateChanged.connect(self.search_string_toggle)
 
-        self.auto_save_on_low = False
-        self.dont_use_year = False
-        self.assume_issue_one = False
-        self.ignore_leading_digits_in_filename = False
-        self.remove_after_success = False
-        self.search_string = ""
-        self.name_length_match_tolerance = self.config.Issue_Identifier__series_match_search_thresh
-        self.split_words = self.cbxSplitWords.isChecked()
         self.adjustSize()
         self.setModal(True)
-        from . import gui
-
-        if gui.tagger_window:
-            self.addAction(gui.tagger_window.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(self.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-
-        self.addAction(cancel)
+        qtutils.add_dialog_shortcuts(self)
 
     def search_string_toggle(self) -> None:
         enable = self.cbxSpecifySearchString.isChecked()
@@ -134,24 +120,15 @@ class AutoTagStartWindow(QtWidgets.QDialog):
 
         self.startAutoTag.emit(
             AutoTagSettings(
-                settings=settngs_namespace.Auto_Tag(
-                    online=self.config.Auto_Tag__online,
-                    save_on_low_confidence=self.cbxSaveOnLowConfidence.isChecked(),
-                    use_year_when_identifying=not self.cbxDontUseYear.isChecked(),
-                    assume_issue_one=self.cbxAssumeIssueOne.isChecked(),
-                    ignore_leading_numbers_in_filename=self.cbxIgnoreLeadingDigitsInFilename.isChecked(),
-                    parse_filename=self.config.Auto_Tag__parse_filename,
-                    prefer_filename=self.config.Auto_Tag__prefer_filename,
-                    issue_id=None,
-                    metadata=GenericMetadata(),
-                    clear_tags=self.cbxClearMetadata.isChecked(),
-                    publisher_filter=self.config.Auto_Tag__publisher_filter,
-                    use_publisher_filter=self.config.Auto_Tag__use_publisher_filter,
-                    auto_imprint=self.cbxAutoImprint.isChecked(),
-                ),
+                save_on_low_confidence=self.cbxSaveOnLowConfidence.isChecked(),
+                use_year_when_identifying=not self.cbxDontUseYear.isChecked(),
+                assume_issue_one=self.cbxAssumeIssueOne.isChecked(),
+                ignore_leading_numbers_in_filename=self.cbxIgnoreLeadingDigitsInFilename.isChecked(),
+                clear_tags=self.cbxClearMetadata.isChecked(),
+                auto_imprint=self.cbxAutoImprint.isChecked(),
                 remove_after_success=self.cbxRemoveAfterSuccess.isChecked(),
                 series_match_identify_thresh=self.sbNameMatchSearchThresh.value(),
                 split_words=self.cbxSplitWords.isChecked(),
-                search_string=self.leSearchString.text(),
+                search_string=self.leSearchString.text() if self.cbxSpecifySearchString.isChecked() else "",
             )
         )

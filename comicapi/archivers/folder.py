@@ -4,7 +4,7 @@ import logging
 import os
 import pathlib
 
-from comicapi.archivers import Archiver
+from comicapi.archivers.archiver import Archiver, member_destination, read_archive
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,10 @@ class FolderArchiver(Archiver):
     def write_file(self, archive_file: str, data: bytes) -> bool:
         self._filename_list = []
         try:
-            file_path = self.path / archive_file
+            file_path = member_destination(self.path, archive_file)
             file_path.parent.mkdir(exist_ok=True, parents=True)
-            with open(self.path / archive_file, mode="wb") as f:
-                f.write(data)
-        except OSError as e:
+            file_path.write_bytes(data)
+        except (OSError, ValueError) as e:
             logger.error("Error writing folder archive [%s]: %s :: %s", e, self.path, archive_file)
             return False
         else:
@@ -85,15 +84,13 @@ class FolderArchiver(Archiver):
         return True
 
     def copy_from_archive(self, other_archive: Archiver) -> bool:
-        """Replace the current zip with one copied from another archive"""
         self._filename_list = []
         try:
-            for filename in other_archive.get_filename_list():
-                data = other_archive.read_file(filename)
-                if data is not None:
-                    self.write_file(filename, data)
-
-            # preserve the old comment
+            with read_archive(other_archive) as read:
+                for filename in other_archive.get_filename_list():
+                    data = read(filename)
+                    if data is not None and not self.write_file(filename, data):
+                        return False
             comment = other_archive.get_comment()
             if comment is not None:
                 if not self.set_comment(comment):

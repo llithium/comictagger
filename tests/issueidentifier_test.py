@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from unittest.mock import Mock
 
 import pytest
 from PIL import Image
@@ -40,50 +41,18 @@ def test_crop(cbz_double_cover, config, tmp_path, comicvine_api):
     assert original_hash == cropped_hash
 
 
-@pytest.mark.parametrize("additional_md, expected", testing.comicdata.metadata_keys)
-def test_get_search_keys(cbz, config, additional_md, expected, comicvine_api):
-    config, definitions = config
-    iio = comictaggerlib.issueidentifier.IssueIdentifierOptions(
-        series_match_search_thresh=config.Issue_Identifier__series_match_search_thresh,
-        series_match_identify_thresh=config.Issue_Identifier__series_match_identify_thresh,
-        use_publisher_filter=config.Auto_Tag__use_publisher_filter,
-        publisher_filter=config.Auto_Tag__publisher_filter,
-        quiet=config.Runtime_Options__quiet,
-        cache_dir=config.Runtime_Options__config.user_cache_dir,
-        border_crop_percent=config.Issue_Identifier__border_crop_percent,
-        talker=comicvine_api,
-        tpb_detection=config.Issue_Identifier__tpb_detection,
-    )
-    ii = comictaggerlib.issueidentifier.IssueIdentifier(iio, None)
-
-    assert expected == ii._get_search_keys(additional_md)
-
-
 @pytest.mark.parametrize("data, expected", testing.comicdata.issueidentifier_score)
-def test_get_issue_cover_match_score(
-    cbz,
-    config,
-    comicvine_api,
-    data: tuple[comicapi.genericmetadata.ImageHash, list[comicapi.genericmetadata.ImageHash], bool],
-    expected: comictaggerlib.resulttypes.Score,
-):
-    config, definitions = config
-    iio = comictaggerlib.issueidentifier.IssueIdentifierOptions(
-        series_match_search_thresh=config.Issue_Identifier__series_match_search_thresh,
-        series_match_identify_thresh=config.Issue_Identifier__series_match_identify_thresh,
-        use_publisher_filter=config.Auto_Tag__use_publisher_filter,
-        publisher_filter=config.Auto_Tag__publisher_filter,
-        quiet=config.Runtime_Options__quiet,
-        cache_dir=config.Runtime_Options__config.user_cache_dir,
-        border_crop_percent=config.Issue_Identifier__border_crop_percent,
-        talker=comicvine_api,
-        tpb_detection=config.Issue_Identifier__tpb_detection,
-    )
-    ii = comictaggerlib.issueidentifier.IssueIdentifier(iio, None)
-    score = ii._get_issue_cover_match_score(
-        primary_img_url=data[0],
-        alt_urls=data[1],
-        local_hashes=[("Cover 1", ii.calculate_hash(cbz.get_page(0)))],
+def test_get_issue_cover_match_score(cbz, identifier, data, expected):
+    def fetch_hash(url, kind):
+        return identifier.calculate_hash(
+            comictaggerlib.issueidentifier.ImageFetcher(identifier.config.cache_dir).fetch(url), kind=kind
+        )
+
+    score = identifier._get_issue_cover_match_score(
+        data[0],
+        data[1],
+        lambda kind: [("Cover 1", identifier.calculate_hash(cbz.get_page(0), kind=kind))],
+        fetch_hash,
     )
     assert expected == score
 
@@ -222,8 +191,6 @@ def identifier(config, comicvine_api):
 
 
 def test_good_match_does_not_load_alternate_pages(identifier, cbz, monkeypatch):
-    from unittest.mock import Mock
-
     extra = Mock(side_effect=AssertionError("Alternate pages should remain unread"))
     monkeypatch.setattr(identifier, "_get_extra_images", extra)
     result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
@@ -233,8 +200,6 @@ def test_good_match_does_not_load_alternate_pages(identifier, cbz, monkeypatch):
 
 
 def test_fallback_reuses_hashes_and_loads_extra_pages_once(identifier, cbz, monkeypatch):
-    from unittest.mock import Mock
-
     calculate_hash = Mock(side_effect=[0, (1 << 64) - 1])
     monkeypatch.setattr(identifier, "calculate_hash", calculate_hash)
     image = Image.new("L", (32, 32))
@@ -254,33 +219,130 @@ def test_fallback_reuses_hashes_and_loads_extra_pages_once(identifier, cbz, monk
         start_year=None,
         format=None,
     )
-    terms = identifier._get_search_keys(issue)
-    matches, _ = identifier._cover_matching(terms, [("cover", image)], extra, [(series, issue)])
+    matches, _ = identifier._cover_matching([("cover", image)], extra, [(series, issue)])
     assert calculate_hash.call_count == 2
     extra.assert_called_once_with()
     assert matches[0].distance == 0
     assert matches[0].score.local_hash_name == "extra"
 
 
-def test_remote_hash_cache_respects_algorithm_and_cancellation(identifier, cbz, monkeypatch):
-    from unittest.mock import Mock
+def candidate(id, cover):
+    series = comicapi.genericmetadata.ComicSeries(
+        id=id,
+        name="Test",
+        aliases=set(),
+        count_of_issues=1,
+        count_of_volumes=None,
+        description="",
+        image_url="",
+        publisher="",
+        start_year=None,
+        format=None,
+    )
+    issue = comicapi.genericmetadata.GenericMetadata(issue_id=id, issue="1", _cover_image=cover)
+    return series, issue
 
+
+def test_matching_respects_candidate_hash_kind(identifier, cbz, monkeypatch):
+    hasher = comictaggerlib.imagehasher.ImageHasher(data=cbz.get_page(0))
+    wrong_ahash = hasher.average_hash() ^ ((1 << 64) - 1)
+    matching_phash = hasher.perception_hash()
+    candidates = [
+        candidate("unrelated", comicapi.genericmetadata.ImageHash(Hash=wrong_ahash, Kind="ahash", URL="")),
+        candidate("matching", comicapi.genericmetadata.ImageHash(Hash=matching_phash, Kind="phash", URL="")),
+    ]
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: candidates)
+
+    result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+
+    assert result == comictaggerlib.issueidentifier.Result.single_good_match
+    assert [match.md.issue_id for match in matches] == ["matching"]
+    assert matches[0].distance == 0
+
+
+@pytest.mark.parametrize("remote_first", [True, False], ids=["download-first", "hash-first"])
+def test_alternate_cover_order_preserves_exact_match_and_keeps_close_candidates(
+    identifier, cbz, monkeypatch, remote_first
+):
+    primary = comicapi.genericmetadata.ImageHash(Hash=(1 << 64) - 1, Kind="ahash", URL="")
+    best_series, best_issue = candidate("exact", primary)
+    close_series, close_issue = candidate("close", primary)
+    remote_url = "https://example.com/alternate.png"
+    downloaded = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL=remote_url)
+    exact = comicapi.genericmetadata.ImageHash(Hash=0, Kind="ahash", URL="")
+    best_issue._alternate_images = [downloaded, exact] if remote_first else [exact, downloaded]
+    close_issue._alternate_images = [comicapi.genericmetadata.ImageHash(Hash=0b111, Kind="ahash", URL="")]
+    monkeypatch.setattr(
+        identifier, "_search_for_issues", lambda terms: [(best_series, best_issue), (close_series, close_issue)]
+    )
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", Mock(return_value=b"downloaded"))
+    monkeypatch.setattr(identifier, "calculate_hash", lambda data=b"", **kwargs: 0xFF if data else 0)
+
+    result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+
+    assert result == comictaggerlib.issueidentifier.Result.multiple_good_matches
+    assert [(match.md.issue_id, match.distance) for match in matches] == [("exact", 0), ("close", 3)]
+
+
+def test_identification_reuses_remote_hashes_only_within_the_run(identifier, cbz, monkeypatch):
     fetch = Mock(return_value=cbz.get_page(0))
     monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fetch)
-    original = identifier._get_remote_hashes(["cover", "cover"])
-    assert original[0] == original[1]
-    assert fetch.call_count == 1
-    identifier.image_hasher = 3
-    alternate = identifier._get_remote_hashes(["cover"])
-    assert alternate[0][1] != original[0][1]
-    assert fetch.call_count == 2
-    identifier.cancel = True
+    cover = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL="https://example.com/cover.png")
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: [candidate("1", cover), candidate("2", cover)])
+
+    for run in (1, 2):
+        result, matches = identifier.identify(cbz, cbz.read_tags("cr"))
+        assert result == comictaggerlib.issueidentifier.Result.multiple_good_matches
+        assert [match.distance for match in matches] == [0, 0]
+        assert fetch.call_count == run
+
+
+def test_cover_network_failure_is_reported_at_identification_boundary(identifier, cbz, monkeypatch):
+    fetch = Mock(side_effect=comictaggerlib.issueidentifier.ImageFetcherException("no connection"))
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fetch)
+    cover = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL="https://example.com/cover.png")
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: [candidate("1", cover)])
+
+    assert identifier.identify(cbz, cbz.read_tags("cr")) == (
+        comictaggerlib.issueidentifier.Result.fetch_data_failure,
+        [],
+    )
+
+
+@pytest.mark.parametrize("cancel_during_download", [False, True])
+def test_alternate_cover_download_failure_preserves_primary_match(identifier, cbz, monkeypatch, cancel_during_download):
+    alternate_url = "https://example.com/alternate.png"
+    series, issue = candidate("primary", comicapi.genericmetadata.ImageHash(Hash=(1 << 64) - 1, Kind="ahash", URL=""))
+    issue._alternate_images = [comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL=alternate_url)]
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: [(series, issue)])
+    monkeypatch.setattr(identifier, "calculate_hash", lambda **kwargs: 0)
+
+    def fail_download(fetcher, url):
+        assert url == alternate_url
+        identifier.cancel = cancel_during_download
+        raise comictaggerlib.issueidentifier.ImageFetcherException("no connection")
+
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", fail_download)
+    metadata = cbz.read_tags("cr")
+
+    if cancel_during_download:
+        with pytest.raises(comictaggerlib.issueidentifier.IssueIdentifierCancelled):
+            identifier.identify(cbz, metadata)
+    else:
+        result, matches = identifier.identify(cbz, metadata)
+        assert result == comictaggerlib.issueidentifier.Result.single_bad_cover_score
+        assert [match.md.issue_id for match in matches] == ["primary"]
+
+
+def test_cancellation_after_cover_download_propagates(identifier, cbz, monkeypatch):
+    monkeypatch.setattr(comictaggerlib.issueidentifier.ImageFetcher, "fetch", Mock(return_value=cbz.get_page(0)))
+    cover = comicapi.genericmetadata.ImageHash(Hash=0, Kind="", URL="https://example.com/cover.png")
+    monkeypatch.setattr(identifier, "_search_for_issues", lambda terms: [candidate("1", cover)])
+
+    def cancel_after_download(current, total, image):
+        if image:
+            identifier.cancel = True
+
+    identifier.progress_callback = cancel_after_download
     with pytest.raises(comictaggerlib.issueidentifier.IssueIdentifierCancelled):
-        identifier._get_remote_hashes(["cover"])
-
-
-def test_new_identification_clears_remote_hash_cache(identifier, cbz, monkeypatch):
-    identifier._remote_hashes[("previous", 1)] = 42
-    monkeypatch.setattr(identifier, "_check_requirements", lambda archive: False)
-    identifier.identify(cbz, cbz.read_tags("cr"))
-    assert identifier._remote_hashes == {}
+        identifier.identify(cbz, cbz.read_tags("cr"))

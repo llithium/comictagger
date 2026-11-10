@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from typing import Any
 
 from comicapi import utils
@@ -27,43 +28,81 @@ from comicapi.tags import Tag
 logger = logging.getLogger(__name__)
 
 
+def _read_web_links(value: str | None) -> list[utils.Url]:
+    return utils.split_urls(utils.xlate(value))
+
+
+def _read_bool(value: str | None) -> bool | None:
+    text = utils.xlate(value)
+    return None if text is None else text.casefold() in ("yes", "true", "1")
+
+
+def _read_set(value: str | None) -> set[str]:
+    return set(utils.split(value, ","))
+
+
+def _read_list(value: str | None) -> list[str]:
+    return utils.split(value, ",")
+
+
+_FIELDS: tuple[tuple[str, str, Callable[[str | None], object]], ...] = (
+    ("series", "Series", utils.xlate),
+    ("series_start_year", "SeriesStartYear", utils.xlate_int),
+    ("issue", "Number", utils.xlate),
+    ("issue_count", "Count", utils.xlate_int),
+    ("title", "Title", utils.xlate),
+    ("volume", "Volume", utils.xlate_int),
+    ("genres", "Genre", _read_set),
+    ("description", "Summary", utils.xlate),
+    ("notes", "Notes", utils.xlate),
+    ("alternate_series", "AlternateSeries", utils.xlate),
+    ("alternate_number", "AlternateNumber", utils.xlate),
+    ("alternate_count", "AlternateCount", utils.xlate_int),
+    ("story_arcs", "StoryArc", _read_list),
+    ("series_groups", "SeriesGroup", _read_list),
+    ("publisher", "Publisher", utils.xlate),
+    ("imprint", "Imprint", utils.xlate),
+    ("day", "Day", utils.xlate_int),
+    ("month", "Month", utils.xlate_int),
+    ("year", "Year", utils.xlate_int),
+    ("language", "LanguageISO", utils.xlate),
+    ("web_links", "Web", _read_web_links),
+    ("format", "Format", utils.xlate),
+    ("manga", "Manga", utils.xlate),
+    ("black_and_white", "BlackAndWhite", _read_bool),
+    ("maturity_rating", "AgeRating", utils.xlate),
+    ("critical_rating", "CommunityRating", utils.xlate_float),
+)
+
+_TRAILING_FIELDS = (
+    ("page_count", "PageCount", utils.xlate_int),
+    ("characters", "Characters", _read_set),
+    ("teams", "Teams", _read_set),
+    ("locations", "Locations", _read_set),
+)
+
+_CREDIT_ROLES = {
+    "Writer": ("Writer", GenericMetadata.writer_synonyms),
+    "Penciller": ("Penciller", GenericMetadata.penciller_synonyms),
+    "Inker": ("Inker", GenericMetadata.inker_synonyms),
+    "Colorist": ("Colorist", GenericMetadata.colorist_synonyms),
+    "Letterer": ("Letterer", GenericMetadata.letterer_synonyms),
+    "CoverArtist": ("Cover", GenericMetadata.cover_synonyms),
+    "Editor": ("Editor", GenericMetadata.editor_synonyms),
+}
+_SUPPORTED_ROLES = {alias for _, aliases in _CREDIT_ROLES.values() for alias in aliases}
+
+
 class ComicRack(Tag):
     enabled = True
-
     id = "cr"
 
     def __init__(self, version: str) -> None:
         super().__init__(version)
-
         self.file = "ComicInfo.xml"
         self.supported_attributes = {
+            *(name for name, _, _ in (*_FIELDS, *_TRAILING_FIELDS)),
             "original_hash",
-            "series",
-            "series_start_year",
-            "issue",
-            "issue_count",
-            "title",
-            "volume",
-            "genres",
-            "description",
-            "notes",
-            "alternate_series",
-            "alternate_number",
-            "alternate_count",
-            "story_arcs",
-            "series_groups",
-            "publisher",
-            "imprint",
-            "day",
-            "month",
-            "year",
-            "language",
-            "web_links",
-            "format",
-            "manga",
-            "black_and_white",
-            "maturity_rating",
-            "critical_rating",
             "scan_info",
             "pages",
             "pages.bookmark",
@@ -73,28 +112,30 @@ class ComicRack(Tag):
             "pages.size",
             "pages.type",
             "pages.width",
-            "page_count",
-            "characters",
-            "teams",
-            "locations",
             "credits",
             "credits.person",
             "credits.role",
         }
 
     def supports_credit_role(self, role: str) -> bool:
-        return role.casefold() in self._get_parseable_credits()
+        return role.casefold() in _SUPPORTED_ROLES
 
     def supports_tags(self, archive: Archiver) -> bool:
         return archive.supports_files()
 
+    def _read_xml(self, archive: Archiver) -> ET.Element | None:
+        if not self.supports_tags(archive) or self.file not in archive.get_filename_list():
+            return None
+        xml = archive.read_file(self.file)
+        try:
+            root = ET.fromstring(xml)
+        except (ET.ParseError, LookupError, ValueError):
+            return None
+        return root if root.tag == "ComicInfo" else None
+
     def has_tags(self, archive: Archiver) -> bool:
-        try:  # read_file can cause an exception
-            return (
-                self.supports_tags(archive)
-                and self.file in archive.get_filename_list()
-                and self._validate_bytes(archive.read_file(self.file))
-            )
+        try:
+            return self._read_xml(archive) is not None
         except Exception:
             return False
 
@@ -102,171 +143,84 @@ class ComicRack(Tag):
         return self.has_tags(archive) and archive.remove_file(self.file)
 
     def read_tags(self, archive: Archiver) -> GenericMetadata:
-        if self.has_tags(archive):
-            try:  # read_file can cause an exception
-                metadata = archive.read_file(self.file) or b""
-                if self._validate_bytes(metadata):
-                    return self._metadata_from_bytes(metadata)
-            except Exception:
-                ...
+        try:
+            root = self._read_xml(archive)
+            if root is not None:
+                return self._convert_xml_to_metadata(root)
+        except Exception:
+            logger.debug("Unable to read %s in %s", self.file, archive.path, exc_info=True)
         return GenericMetadata()
 
     def read_raw_tags(self, archive: Archiver) -> str:
-        try:  # read_file can cause an exception
-            if self.has_tags(archive):
-                b = archive.read_file(self.file)
-                # ET.fromstring is used as xml can declare the encoding
-                return ET.tostring(ET.fromstring(b), encoding="unicode", xml_declaration=True)
+        try:
+            root = self._read_xml(archive)
+            if root is not None:
+                return ET.tostring(root, encoding="unicode", xml_declaration=True)
         except Exception:
-            ...
+            logger.debug("Unable to read %s in %s", self.file, archive.path, exc_info=True)
         return ""
 
     def write_tags(self, metadata: GenericMetadata, archive: Archiver) -> bool:
-        if self.supports_tags(archive):
-            xml = b""
-            try:  # read_file can cause an exception
-                if self.has_tags(archive):
-                    xml = archive.read_file(self.file)
-                return archive.write_file(self.file, self._bytes_from_metadata(metadata, xml))
-            except Exception:
-                ...
-        else:
+        if not self.supports_tags(archive):
             logger.warning("Archive %s(%s) does not support '%s' metadata", archive.path, archive.name(), self.name())
-        return False
+            return False
+
+        try:
+            try:
+                existing_xml = self._read_xml(archive)
+            except OSError:
+                logger.debug("Unable to read existing %s in %s", self.file, archive.path, exc_info=True)
+                existing_xml = None
+            root = self._convert_metadata_to_xml(metadata, existing_xml)
+            return archive.write_file(self.file, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+        except Exception:
+            logger.exception("Unable to write %s in %s", self.file, archive.path)
+            return False
 
     def name(self) -> str:
         return "Comic Rack"
 
-    @classmethod
-    def _get_parseable_credits(cls) -> list[str]:
-        parsable_credits: list[str] = []
-        parsable_credits.extend(GenericMetadata.writer_synonyms)
-        parsable_credits.extend(GenericMetadata.penciller_synonyms)
-        parsable_credits.extend(GenericMetadata.inker_synonyms)
-        parsable_credits.extend(GenericMetadata.colorist_synonyms)
-        parsable_credits.extend(GenericMetadata.letterer_synonyms)
-        parsable_credits.extend(GenericMetadata.cover_synonyms)
-        parsable_credits.extend(GenericMetadata.editor_synonyms)
-        return parsable_credits
+    def _convert_metadata_to_xml(self, md: GenericMetadata, root: ET.Element | None) -> ET.Element:
+        if root is None:
+            root = ET.Element(
+                "ComicInfo",
+                {
+                    "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+                    "xmlns:xsd": "http://www.w3.org/2001/XMLSchema",
+                },
+            )
 
-    def _metadata_from_bytes(self, string: bytes) -> GenericMetadata:
-        root = ET.fromstring(string)
-        return self._convert_xml_to_metadata(root)
+        def assign(element_name: str, value: object) -> None:
+            element = root.find(element_name)
+            if value:
+                if element is None:
+                    element = ET.SubElement(root, element_name)
+                element.text = ",".join(value) if isinstance(value, (list, set)) else str(value)
+            elif element is not None:
+                root.remove(element)
 
-    def _bytes_from_metadata(self, metadata: GenericMetadata, xml: bytes = b"") -> bytes:
-        root = self._convert_metadata_to_xml(metadata, xml)
-        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
-
-    def _convert_metadata_to_xml(self, metadata: GenericMetadata, xml: bytes = b"") -> ET.Element:
-        # shorthand for the metadata
-        md = metadata
-
-        if xml:
-            root = ET.fromstring(xml)
-        else:
-            # build a tree structure
-            root = ET.Element("ComicInfo")
-            root.attrib["xmlns:xsi"] = "http://www.w3.org/2001/XMLSchema-instance"
-            root.attrib["xmlns:xsd"] = "http://www.w3.org/2001/XMLSchema"
-        # helper func
-
-        def assign(cr_entry: str, md_entry: Any) -> None:
-            if md_entry:
-                text = str(md_entry)
-                if isinstance(md_entry, (list, set)):
-                    text = ",".join(md_entry)
-                et_entry = root.find(cr_entry)
-                if et_entry is not None:
-                    et_entry.text = text
-                else:
-                    ET.SubElement(root, cr_entry).text = text
-            else:
-                et_entry = root.find(cr_entry)
-                if et_entry is not None:
-                    root.remove(et_entry)
-
-        # need to specially process the credits, since they are structured
-        # differently than CIX
-        credit_writer_list = []
-        credit_penciller_list = []
-        credit_inker_list = []
-        credit_colorist_list = []
-        credit_letterer_list = []
-        credit_cover_list = []
-        credit_editor_list = []
-
-        # first, loop thru credits, and build a list for each role that CIX
-        # supports
-        for credit in metadata.credits:
-            if credit.role.casefold() in set(GenericMetadata.writer_synonyms):
-                credit_writer_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.penciller_synonyms):
-                credit_penciller_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.inker_synonyms):
-                credit_inker_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.colorist_synonyms):
-                credit_colorist_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.letterer_synonyms):
-                credit_letterer_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.cover_synonyms):
-                credit_cover_list.append(credit.person.replace(",", ""))
-
-            if credit.role.casefold() in set(GenericMetadata.editor_synonyms):
-                credit_editor_list.append(credit.person.replace(",", ""))
-
-        assign("Series", md.series)
-        assign("SeriesStartYear", md.series_start_year)
-        assign("Number", md.issue)
-        assign("Count", md.issue_count)
-        assign("Title", md.title)
-        assign("Volume", md.volume)
-        assign("Genre", md.genres)
-        assign("Summary", md.description)
-        assign("Notes", md.notes)
-
-        assign("AlternateSeries", md.alternate_series)
-        assign("AlternateNumber", md.alternate_number)
-        assign("AlternateCount", md.alternate_count)
-        assign("StoryArc", md.story_arcs)
-        assign("SeriesGroup", md.series_groups)
-
-        assign("Publisher", md.publisher)
-        assign("Imprint", md.imprint)
-        assign("Day", md.day)
-        assign("Month", md.month)
-        assign("Year", md.year)
-        assign("LanguageISO", md.language)
-        assign("Web", " ".join(u.url for u in md.web_links))
-        assign("Format", md.format)
-        assign("Manga", md.manga)
-        assign("BlackAndWhite", "Yes" if md.black_and_white else None)
-        assign("AgeRating", md.maturity_rating)
-        assign("CommunityRating", md.critical_rating)
+        for name, element_name, _ in _FIELDS:
+            value = getattr(md, name)
+            if name == "web_links":
+                value = " ".join(link.url for link in md.web_links)
+            elif name == "black_and_white":
+                value = "Yes" if md.black_and_white else None
+            assign(element_name, value)
 
         scan_info = md.scan_info or ""
         if md.original_hash:
             scan_info += f" sum:{md.original_hash}"
         assign("ScanInformation", scan_info)
 
-        assign("PageCount", md.page_count)
+        for name, element_name, _ in _TRAILING_FIELDS:
+            assign(element_name, getattr(md, name))
 
-        assign("Characters", md.characters)
-        assign("Teams", md.teams)
-        assign("Locations", md.locations)
-        assign("Writer", ", ".join(credit_writer_list))
-        assign("Penciller", ", ".join(credit_penciller_list))
-        assign("Inker", ", ".join(credit_inker_list))
-        assign("Colorist", ", ".join(credit_colorist_list))
-        assign("Letterer", ", ".join(credit_letterer_list))
-        assign("CoverArtist", ", ".join(credit_cover_list))
-        assign("Editor", ", ".join(credit_editor_list))
+        for element_name, (_, aliases) in _CREDIT_ROLES.items():
+            assign(
+                element_name,
+                ", ".join(credit.person.replace(",", "") for credit in md.credits if credit.role.casefold() in aliases),
+            )
 
-        #  loop and add the page entries under pages node
         pages_node = root.find("Pages")
         if pages_node is not None:
             pages_node.clear()
@@ -296,45 +250,11 @@ class ComicRack(Tag):
         return root
 
     def _convert_xml_to_metadata(self, root: ET.Element) -> GenericMetadata:
-        if root.tag != "ComicInfo":
-            raise Exception("Not a ComicInfo file")
-
-        def get(name: str) -> str | None:
-            tag = root.find(name)
-            if tag is None:
-                return None
-            return tag.text
-
         md = GenericMetadata()
+        for name, element_name, decode in (*_FIELDS, *_TRAILING_FIELDS):
+            setattr(md, name, decode(root.findtext(element_name)))
 
-        md.series = utils.xlate(get("Series"))
-        md.series_start_year = utils.xlate_int(get("SeriesStartYear"))
-        md.issue = utils.xlate(get("Number"))
-        md.issue_count = utils.xlate_int(get("Count"))
-        md.title = utils.xlate(get("Title"))
-        md.volume = utils.xlate_int(get("Volume"))
-        md.genres = set(utils.split(get("Genre"), ","))
-        md.description = utils.xlate(get("Summary"))
-        md.notes = utils.xlate(get("Notes"))
-
-        md.alternate_series = utils.xlate(get("AlternateSeries"))
-        md.alternate_number = utils.xlate(get("AlternateNumber"))
-        md.alternate_count = utils.xlate_int(get("AlternateCount"))
-        md.story_arcs = utils.split(get("StoryArc"), ",")
-        md.series_groups = utils.split(get("SeriesGroup"), ",")
-
-        md.publisher = utils.xlate(get("Publisher"))
-        md.imprint = utils.xlate(get("Imprint"))
-        md.day = utils.xlate_int(get("Day"))
-        md.month = utils.xlate_int(get("Month"))
-        md.year = utils.xlate_int(get("Year"))
-        md.language = utils.xlate(get("LanguageISO"))
-        md.web_links = utils.split_urls(utils.xlate(get("Web")))
-        md.format = utils.xlate(get("Format"))
-        md.manga = utils.xlate(get("Manga"))
-        md.maturity_rating = utils.xlate(get("AgeRating"))
-        md.critical_rating = utils.xlate_float(get("CommunityRating"))
-        scan_info_list = (utils.xlate(get("ScanInformation")) or "").split()
+        scan_info_list = (utils.xlate(root.findtext("ScanInformation")) or "").split()
         for word in scan_info_list.copy():
             if not word.startswith("sum:"):
                 continue
@@ -345,40 +265,13 @@ class ComicRack(Tag):
                 break
         if scan_info_list:
             md.scan_info = " ".join(scan_info_list)
-        md.is_empty = False
 
-        md.page_count = utils.xlate_int(get("PageCount"))
+        for element in root:
+            credit_role = _CREDIT_ROLES.get(element.tag)
+            if credit_role is not None:
+                for name in utils.split(element.text, ","):
+                    md.add_credit(name.strip(), credit_role[0])
 
-        md.characters = set(utils.split(get("Characters"), ","))
-        md.teams = set(utils.split(get("Teams"), ","))
-        md.locations = set(utils.split(get("Locations"), ","))
-
-        tmp = utils.xlate(get("BlackAndWhite"))
-        if tmp is not None:
-            md.black_and_white = tmp.casefold() in ["yes", "true", "1"]
-
-        # Now extract the credit info
-        for n in root:
-            if any(
-                [
-                    n.tag == "Writer",
-                    n.tag == "Penciller",
-                    n.tag == "Inker",
-                    n.tag == "Colorist",
-                    n.tag == "Letterer",
-                    n.tag == "Editor",
-                ]
-            ):
-                if n.text is not None:
-                    for name in utils.split(n.text, ","):
-                        md.add_credit(name.strip(), n.tag)
-
-            if n.tag == "CoverArtist":
-                if n.text is not None:
-                    for name in utils.split(n.text, ","):
-                        md.add_credit(name.strip(), "Cover")
-
-        # parse page data now
         pages_node = root.find("Pages")
         if pages_node is not None:
             for i, page in enumerate(pages_node):
@@ -403,17 +296,4 @@ class ComicRack(Tag):
 
                 md.pages.append(md_page)
 
-        md.is_empty = False
-
         return md
-
-    def _validate_bytes(self, string: bytes) -> bool:
-        """verify that the string actually contains CIX data in XML format"""
-        try:
-            root = ET.fromstring(string)
-            if root.tag != "ComicInfo":
-                return False
-        except ET.ParseError:
-            return False
-
-        return True

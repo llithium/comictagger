@@ -32,9 +32,9 @@ from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.graphics import graphics_path
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.resulttypes import OnlineMatchResults
-from comictaggerlib.settingswindow import linuxRarHelp, macRarHelp, windowsRarHelp
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
+from comictaggerlib.ui.rarhelp import LINUX_RAR_HELP, MAC_RAR_HELP, WINDOWS_RAR_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,7 @@ class FileSelectionList(QtWidgets.QWidget):
             (match_results.no_matches, "No match", "Auto-Tag did not find a match."),
             (match_results.fetch_data_failures, "Fetch error", "Auto-Tag could not fetch the selected metadata."),
             (match_results.write_failures, "Write error", "Auto-Tag found a match but could not write its tags."),
+            (match_results.read_failures, "Read error", "Auto-Tag could not read the archive's tags."),
         )
 
         self.twList.setSortingEnabled(False)
@@ -409,13 +410,13 @@ class FileSelectionList(QtWidgets.QWidget):
         if self.rar_ro_shown:
             return
         if platform.system() == "Windows":
-            rar_help = windowsRarHelp
+            rar_help = WINDOWS_RAR_HELP
 
         elif platform.system() == "Darwin":
-            rar_help = macRarHelp
+            rar_help = MAC_RAR_HELP
 
         else:
-            rar_help = linuxRarHelp
+            rar_help = LINUX_RAR_HELP
 
         OptionalMessageDialog.msg_no_checkbox(
             self,

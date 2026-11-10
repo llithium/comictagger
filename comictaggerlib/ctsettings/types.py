@@ -12,7 +12,6 @@ import yaml
 from appdirs import AppDirs
 
 from comicapi import utils
-from comicapi.comicarchive import tags
 from comicapi.genericmetadata import REMOVE, GenericMetadata
 
 
@@ -34,6 +33,10 @@ class ComicTaggerPaths(AppDirs):
         if self.path:
             return self.path
         return pathlib.Path(super().user_config_dir)
+
+    @property
+    def settings_file(self) -> pathlib.Path:
+        return self.user_config_dir / "settings.json"
 
     @property
     def user_cache_dir(self) -> pathlib.Path:
@@ -69,18 +72,6 @@ class ComicTaggerPaths(AppDirs):
 
     def __str__(self) -> str:
         return f"logs: {self.user_log_dir}, config: {self.user_config_dir}, cache: {self.user_cache_dir}"
-
-
-def tag(types: str) -> list[str]:
-    enabled_tags = [tag for tag in tags if tags[tag].enabled]
-    result = []
-    types = types.casefold()
-    for typ in utils.split(types, ","):
-        if typ not in enabled_tags:
-            choices = ", ".join(enabled_tags)
-            raise argparse.ArgumentTypeError(f"invalid choice: {typ} (choose from {choices.upper()})")
-        result.append(tags[typ].id)
-    return result
 
 
 def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
@@ -138,8 +129,6 @@ def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
         if not isinstance(md_dict, Mapping):
             raise argparse.ArgumentTypeError("Metadata must be a mapping of tag names to values")
 
-        empty = True
-        # Map the dict to the metadata object
         for key, value in md_dict.items():
             if key in fields:
                 t = get_type(key)
@@ -161,11 +150,9 @@ def parse_metadata_from_string(mdstr: str) -> GenericMetadata:
                 else:
                     value = convert_value(t, value)
 
-                empty = False
                 setattr(md, key, value)
             else:
                 raise argparse.ArgumentTypeError(f"'{key}' is not a valid tag name")
-        md.is_empty = empty
     except argparse.ArgumentTypeError:
         raise
     except (yaml.YAMLError, OSError, UnicodeError, ValueError, TypeError) as e:

@@ -18,15 +18,23 @@ from __future__ import annotations
 
 import contextlib
 import datetime
-import logging
 import pathlib
 import sqlite3
 import threading
-from typing import Any, Generic, TypeVar
+from collections.abc import Iterator
+from typing import Generic, TypeVar
 
 from typing_extensions import NamedTuple
 
-logger = logging.getLogger(__name__)
+_CACHE_SETUP_LOCK = threading.Lock()
+_UPSERT_SERIES = """INSERT INTO Series (id, source, data, complete) VALUES (?, ?, ?, ?)
+    ON CONFLICT (id, source) DO UPDATE SET
+        timestamp = excluded.timestamp, data = excluded.data, complete = excluded.complete
+    WHERE excluded.complete OR NOT Series.complete"""
+_UPSERT_ISSUE = """INSERT INTO Issues (id, source, series_id, data, complete) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (id, source) DO UPDATE SET
+        timestamp = excluded.timestamp, series_id = excluded.series_id, data = excluded.data, complete = excluded.complete
+    WHERE excluded.complete OR NOT Issues.complete"""
 
 
 class Series(NamedTuple):
@@ -54,20 +62,17 @@ class ComicCacher:
         self.db_file = cache_folder / "comic_cache.db"
         self.version_file = cache_folder / "cache_version.txt"
         self.version = version
-        self.local: threading.Thread | None = None
-        self.db: sqlite3.Connection | None = None
-
-        self.cache_folder.mkdir(parents=True, exist_ok=True)
-
-        # A missing, unreadable, or older version marker starts a fresh cache.
-        data = None
-        try:
-            data = self.version_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            ...
-        if data != version:
-            self._remove_cache_files()
-        self.create_cache_db()
+        with _CACHE_SETUP_LOCK:
+            self.cache_folder.mkdir(parents=True, exist_ok=True)
+            try:
+                cached_version = self.version_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                cached_version = None
+            if cached_version != version:
+                self._remove_cache_files()
+            self._create_cache_db()
+            if cached_version != version:
+                self.version_file.write_text(version, encoding="utf-8")
 
     def a_week(self) -> datetime.datetime:
         return datetime.datetime.today() - datetime.timedelta(days=7)
@@ -76,36 +81,23 @@ class ComicCacher:
         return datetime.datetime.today() - datetime.timedelta(days=365)
 
     def clear_cache(self) -> None:
-        self._remove_cache_files()
-        self.create_cache_db()
+        with _CACHE_SETUP_LOCK, self._connection() as con:
+            con.execute("DELETE FROM SeriesSearchCache")
+            con.execute("DELETE FROM Series")
+            con.execute("DELETE FROM Issues")
 
     def _remove_cache_files(self) -> None:
-        self.close()
         self.db_file.unlink(missing_ok=True)
         self.version_file.unlink(missing_ok=True)
 
-    def connect(self) -> sqlite3.Connection:
-        if self.local != threading.current_thread():
-            self.db = None
-        if self.db is None:
-            self.local = threading.current_thread()
-            self.db = sqlite3.connect(self.db_file)
-            self.db.row_factory = sqlite3.Row
-            self.db.text_factory = str
-        return self.db
+    @contextlib.contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+            con.row_factory = sqlite3.Row
+            yield con
 
-    def close(self) -> None:
-        if self.db is not None:
-            self.db.close()
-            self.db = None
-
-    def create_cache_db(self) -> None:
-        # create the version file
-        with open(self.version_file, "w", encoding="utf-8") as f:
-            f.write(self.version)
-
-        # create tables
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
+    def _create_cache_db(self) -> None:
+        with self._connection() as con, contextlib.closing(con.cursor()) as cur:
             cur.execute("""CREATE TABLE IF NOT EXISTS SeriesSearchCache(
                 timestamp DATE DEFAULT (datetime('now','localtime')),
                 id          TEXT NOT NULL,
@@ -135,55 +127,28 @@ class ComicCacher:
         cur.execute(f"DELETE FROM '{table}' WHERE timestamp  < ?", [str(expiration)])
 
     def add_search_results(self, source: str, search_term: str, series_list: list[Series], complete: bool) -> None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-
-            # remove all previous entries with this search term
-            cur.execute(
-                "DELETE FROM SeriesSearchCache WHERE search_term = ? AND source = ?",
-                [search_term.casefold(), source],
+        key = search_term.casefold()
+        with self._connection() as con:
+            con.execute("DELETE FROM SeriesSearchCache WHERE search_term = ? AND source = ?", (key, source))
+            con.executemany(
+                "INSERT INTO SeriesSearchCache (source, search_term, id) VALUES (?, ?, ?)",
+                ((source, key, series.id) for series in series_list),
             )
-
-            # now add in new results
-            for series in series_list:
-                cur.execute(
-                    "INSERT INTO SeriesSearchCache (source, search_term, id) VALUES(?, ?, ?)",
-                    (source, search_term.casefold(), series.id),
-                )
-                data = {
-                    "id": series.id,
-                    "source": source,
-                    "data": series.data,
-                    "complete": complete,
-                }
-                self.upsert(cur, "series", data)
+            con.executemany(_UPSERT_SERIES, ((series.id, source, series.data, complete) for series in series_list))
 
     def add_series_info(self, source: str, series: Series, complete: bool) -> None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-
-            data = {
-                "id": series.id,
-                "source": source,
-                "data": series.data,
-                "complete": complete,
-            }
-            self.upsert(cur, "series", data)
+        with self._connection() as con:
+            con.execute(_UPSERT_SERIES, (series.id, source, series.data, complete))
 
     def add_issues_info(self, source: str, issues: list[Issue], complete: bool) -> None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
-
-            for issue in issues:
-                data = {
-                    "id": issue.id,
-                    "series_id": issue.series_id,
-                    "data": issue.data,
-                    "source": source,
-                    "complete": complete,
-                }
-                self.upsert(cur, "issues", data)
+        with self._connection() as con:
+            con.executemany(
+                _UPSERT_ISSUE, ((issue.id, source, issue.series_id, issue.data, complete) for issue in issues)
+            )
 
     def get_search_results(self, source: str, search_term: str, expire_stale: bool = True) -> list[CacheResult[Series]]:
         results = []
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
+        with self._connection() as con, contextlib.closing(con.cursor()) as cur:
 
             if expire_stale:
                 self.expire_stale_records(cur, "SeriesSearchCache", self.a_week())
@@ -206,7 +171,7 @@ class ComicCacher:
         return results
 
     def get_series_info(self, series_id: str, source: str, expire_stale: bool = True) -> CacheResult[Series] | None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
+        with self._connection() as con, contextlib.closing(con.cursor()) as cur:
 
             if expire_stale:
                 self.expire_stale_records(cur, "Series", self.a_year())
@@ -226,7 +191,7 @@ class ComicCacher:
     def get_series_issues_info(
         self, series_id: str, source: str, expire_stale: bool = True
     ) -> list[CacheResult[Issue]]:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
+        with self._connection() as con, contextlib.closing(con.cursor()) as cur:
 
             if expire_stale:
                 self.expire_stale_records(cur, "Issues", self.a_year())
@@ -246,7 +211,7 @@ class ComicCacher:
         return results
 
     def get_issue_info(self, issue_id: str, source: str, expire_stale: bool = True) -> CacheResult[Issue] | None:
-        with self.connect() as con, contextlib.closing(con.cursor()) as cur:
+        with self._connection() as con, contextlib.closing(con.cursor()) as cur:
 
             if expire_stale:
                 self.expire_stale_records(cur, "Issues", self.a_year())
@@ -260,37 +225,3 @@ class ComicCacher:
                 record = CacheResult(Issue(id=row["id"], series_id=row["series_id"], data=row["data"]), row["complete"])
 
             return record
-
-    def upsert(self, cur: sqlite3.Cursor, tablename: str, data: dict[str, Any]) -> None:
-        """This does an insert if the given PK doesn't exist, and an
-        update it if does
-        """
-
-        keys = ""
-        vals = []
-        ins_slots = ""
-        set_slots = ""
-
-        for key in data:
-            if data[key] is None:
-                continue
-
-            if keys:
-                keys += ", "
-            if ins_slots:
-                ins_slots += ", "
-            if set_slots:
-                set_slots += ", "
-
-            keys += key
-            vals.append(data[key])
-            ins_slots += "?"
-            set_slots += key + " = ?"
-
-        sql_ins = f"INSERT OR REPLACE INTO {tablename} ({keys}) VALUES ({ins_slots})"
-        if not data.get("complete", True):
-            sql_ins += f" ON CONFLICT DO UPDATE SET {set_slots} WHERE complete != ?"
-            vals.extend(vals.copy())
-            vals.append(True)  # If the cache is complete and this isn't complete we don't update it
-
-        cur.execute(sql_ins, vals)

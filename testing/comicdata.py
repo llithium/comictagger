@@ -3,6 +3,7 @@ from __future__ import annotations
 import comicapi.genericmetadata
 import comictaggerlib.resulttypes
 from comicapi import utils
+from comicapi._metadata_example import example_metadata
 
 search_results = [
     dict(
@@ -34,14 +35,14 @@ search_results = [
 # Used to test GenericMetadata.overlay
 metadata = [
     (
-        comicapi.genericmetadata.md_test.copy(),
+        example_metadata.copy(),
         comicapi.genericmetadata.GenericMetadata(series="test", issue="2", title="never"),
-        comicapi.genericmetadata.md_test.replace(series="test", issue="2", title="never"),
+        example_metadata.replace(series="test", issue="2", title="never"),
     ),
     (
-        comicapi.genericmetadata.md_test.copy(),
+        example_metadata.copy(),
         comicapi.genericmetadata.GenericMetadata(),
-        comicapi.genericmetadata.md_test.copy(),
+        example_metadata.copy(),
     ),
     (
         comicapi.genericmetadata.GenericMetadata(
@@ -178,37 +179,19 @@ metadata_combine = [
     ),
 ]
 
-metadata_keys = [
-    (
-        comicapi.genericmetadata.md_test,
-        {
-            "issue_count": 6,
-            "issue_number": "1",
-            "month": 10,
-            "series": "Cory Doctorow's Futuristic Tales of the Here and Now",
-            "year": 2007,
-            "alternate_count": 7,
-            "alternate_number": "2",
-            "imprint": "craphound.com",
-            "publisher": "IDW Publishing",
-            "page_count": 24,
-        },
-    ),
-]
-
 credits = [
     (
-        comicapi.genericmetadata.md_test.copy(),
+        example_metadata.copy(),
         "writer",
         comicapi.genericmetadata.Credit(person="Dara Naraghi", role="Writer"),
     ),
     (
-        comicapi.genericmetadata.md_test.copy(),
+        example_metadata.copy(),
         "writeR",
         comicapi.genericmetadata.Credit(person="Dara Naraghi", role="Writer"),
     ),
     (
-        comicapi.genericmetadata.md_test.replace(
+        example_metadata.replace(
             credits=[
                 comicapi.genericmetadata.Credit(person="Dara Naraghi", role="writer"),
                 comicapi.genericmetadata.Credit(person="Dara Naraghi", role="writer"),

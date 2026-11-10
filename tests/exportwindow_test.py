@@ -7,6 +7,8 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from comicapi.archivers.folder import FolderArchiver
+from comicapi.comicarchive import ComicArchive
 from comictaggerlib import taggerwindow
 from comictaggerlib.exportwindow import ExportConfig, ExportConflictOpts
 
@@ -31,23 +33,30 @@ def test_export_dialog_is_ready_before_post_show_work(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("conflict", "existing", "success", "expected_name"),
+    ("conflict", "existing", "success", "expected_name", "export_folder"),
     [
-        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz"),
-        (ExportConflictOpts.DONT_CREATE, True, True, None),
-        (ExportConflictOpts.CREATE_UNIQUE, True, True, "comic (1).cbz"),
-        (ExportConflictOpts.DONT_CREATE, False, False, "comic.cbz"),
+        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz", None),
+        (ExportConflictOpts.DONT_CREATE, True, True, None, None),
+        (ExportConflictOpts.CREATE_UNIQUE, True, True, "comic (1).cbz", None),
+        (ExportConflictOpts.DONT_CREATE, False, False, "comic.cbz", None),
+        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz", "ComicTagger-export-test"),
     ],
 )
-def test_export_conflict_and_source_deletion(tmp_path, monkeypatch, conflict, existing, success, expected_name):
+def test_export_conflict_and_source_deletion(
+    tmp_path, monkeypatch, conflict, existing, success, expected_name, export_folder
+):
     source = tmp_path / "comic.cbr"
     source.write_bytes(b"source")
     destination = tmp_path / "comic.cbz"
     if existing:
         destination.write_bytes(b"existing")
 
+    exported_path = (tmp_path / (export_folder or "") / expected_name) if expected_name and success else None
     archive = SimpleNamespace(
-        path=source, is_zip=lambda: False, get_number_of_pages=lambda: 1, export_as_zip=Mock(return_value=success)
+        path=source,
+        is_zip=lambda: False,
+        get_number_of_pages=lambda: 1,
+        export_as_new_zip=Mock(return_value=exported_path),
     )
     selection = SimpleNamespace(
         get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
@@ -59,13 +68,77 @@ def test_export_conflict_and_source_deletion(tmp_path, monkeypatch, conflict, ex
     taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(conflict, True, True))
 
     if expected_name is None:
-        archive.export_as_zip.assert_not_called()
+        archive.export_as_new_zip.assert_not_called()
     else:
-        archive.export_as_zip.assert_called_once_with(tmp_path / expected_name)
+        archive.export_as_new_zip.assert_called_once_with(
+            destination, unique=conflict == ExportConflictOpts.CREATE_UNIQUE
+        )
     assert source.exists() is (expected_name is None or not success)
     selection.remove_archive_list.assert_called_once_with([archive] if expected_name and success else [])
-    selection.add_path_list.assert_called_once_with(
-        [str(tmp_path / expected_name)] if expected_name and success else []
-    )
+    selection.add_path_list.assert_called_once_with([str(exported_path)] if exported_path else [])
+    if export_folder:
+        assert str(exported_path) in taggerwindow.LogWindow.return_value.set_text.call_args.args[0]
     if existing:
         assert destination.read_bytes() == b"existing"
+
+
+def test_dont_create_reports_a_destination_appearing_during_export_as_skipped(tmp_path, monkeypatch):
+    source = tmp_path / "comic"
+    source.mkdir()
+    page = source / "001.jpg"
+    page.write_bytes(b"source page")
+    destination = tmp_path / "comic.cbz"
+    archiver = FolderArchiver.open(source)
+    archive = ComicArchive(archiver)
+    read_file = archiver.read_file
+
+    def read_while_another_export_finishes(name):
+        destination.write_bytes(b"another export")
+        return read_file(name)
+
+    monkeypatch.setattr(archiver, "read_file", read_while_another_export_finishes)
+    selection = SimpleNamespace(
+        get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
+    )
+    window = SimpleNamespace(fileSelectionList=selection)
+    log_window = Mock()
+    monkeypatch.setattr(taggerwindow, "LogWindow", log_window)
+    monkeypatch.setattr(taggerwindow.QtCore.QCoreApplication, "processEvents", Mock())
+
+    taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(ExportConflictOpts.DONT_CREATE, True, True))
+
+    summary = log_window.return_value.set_text.call_args.args[0]
+    assert "1 archive(s) were skipped due to file name conflicts" in summary
+    assert "failed to export" not in summary
+    assert page.read_bytes() == b"source page"
+    assert destination.read_bytes() == b"another export"
+    selection.add_path_list.assert_called_once_with([])
+    selection.remove_archive_list.assert_called_once_with([])
+
+
+def test_export_summary_distinguishes_an_undeleted_source_from_a_failed_export(tmp_path, monkeypatch):
+    source = tmp_path / "comic"
+    source.mkdir()
+    page = source / "001.jpg"
+    page.write_bytes(b"source page")
+    destination = tmp_path / "comic.cbz"
+    archive = ComicArchive(FolderArchiver.open(source))
+    selection = SimpleNamespace(
+        get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
+    )
+    window = SimpleNamespace(fileSelectionList=selection)
+    log_window = Mock()
+    monkeypatch.setattr(taggerwindow, "LogWindow", log_window)
+    monkeypatch.setattr(taggerwindow.QtCore.QCoreApplication, "processEvents", Mock())
+
+    taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(ExportConflictOpts.DONT_CREATE, True, True))
+
+    assert destination.is_file()
+    assert page.read_bytes() == b"source page"
+    summary = log_window.return_value.set_text.call_args.args[0]
+    assert "Successfully created 1" in summary
+    assert "could not be deleted after export" in summary
+    assert str(source) in summary and str(destination) in summary
+    assert "failed to export" not in summary
+    selection.add_path_list.assert_called_once_with([str(destination)])
+    selection.remove_archive_list.assert_called_once_with([])

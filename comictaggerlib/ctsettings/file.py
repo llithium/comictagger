@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import uuid
+from functools import partial
 
 import settngs
 
 from comicapi import merge, utils
-from comicapi.comicarchive import tags
 from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.ctsettings.settngs_namespace import SettngsNS as ct_ns
 from comictaggerlib.ctsettings.types import parse_metadata_from_string
@@ -14,7 +14,6 @@ from comictaggerlib.defaults import DEFAULT_REPLACEMENTS, Replacement, Replaceme
 
 
 def general(parser: settngs.Manager) -> None:
-    # General Settings
     parser.add_setting("check_for_new_version", default=False, cmdline=False)
     parser.add_setting("blur", default=False, cmdline=False)
     parser.add_setting(
@@ -25,12 +24,11 @@ def general(parser: settngs.Manager) -> None:
     )
 
 
-def internal(parser: settngs.Manager) -> None:
-    # automatic settings
+def internal(parser: settngs.Manager, default_tag: str) -> None:
     parser.add_setting("install_id", default=uuid.uuid4().hex, cmdline=False)
     parser.add_setting("embedded_hash_type", default="shake_256", cmdline=False)
-    parser.add_setting("write_tags", default=["cix" if "cix" in tags else "cr"], cmdline=False)
-    parser.add_setting("read_tags", default=["cix" if "cix" in tags else "cr"], cmdline=False)
+    parser.add_setting("write_tags", default=[default_tag], cmdline=False)
+    parser.add_setting("read_tags", default=[default_tag], cmdline=False)
     parser.add_setting("last_opened_folder", default="", cmdline=False)
     parser.add_setting("window_width", default=0, cmdline=False)
     parser.add_setting("window_height", default=0, cmdline=False)
@@ -351,51 +349,28 @@ def autotag(parser: settngs.Manager) -> None:
     )
 
 
-def parse_filter(config: settngs.Config[ct_ns]) -> settngs.Config[ct_ns]:
-    new_filter = []
-    remove = []
-    for x in config[0].Auto_Tag__publisher_filter:
-        x = x.strip()
-        if x:  # ignore empty arguments
-            if x[-1] == "-":  # this publisher needs to be removed. We remove after all publishers have been enumerated
-                remove.append(x.strip("-"))
-            else:
-                if x not in new_filter:
-                    new_filter.append(x)
-    for x in remove:  # remove publishers
-        if x in new_filter:
-            new_filter.remove(x)
-    config[0].Auto_Tag__publisher_filter = new_filter
-    return config
+def parse_publisher_filter(values: list[str]) -> list[str]:
+    publishers = dict.fromkeys(value.strip() for value in values if value.strip())
+    # A trailing dash removes a publisher, regardless of where it was added.
+    removed = {name.strip("-") for name in publishers if name.endswith("-")}
+    return [name for name in publishers if not name.endswith("-") and name not in removed]
 
 
-def migrate_settings(config: settngs.Config[ct_ns]) -> settngs.Config[ct_ns]:
+def migrate_tag_ids(value: list[str] | str | int) -> list[str]:
     original_types = ("cbi", "cr", "comet")
-    write_Tags = config[0].internal__write_tags
-    if not isinstance(write_Tags, list):
-        if isinstance(write_Tags, int) and write_Tags in (0, 1, 2):
-            config[0].internal__write_tags = [original_types[write_Tags]]
-        elif isinstance(write_Tags, str):
-            config[0].internal__write_tags = [write_Tags]
-        else:
-            config[0].internal__write_tags = ["cr"]
-
-    read_tags = config[0].internal__read_tags
-    if not isinstance(read_tags, list):
-        if isinstance(read_tags, int) and read_tags in (0, 1, 2):
-            config[0].internal__read_tags = [original_types[read_tags]]
-        elif isinstance(read_tags, str):
-            config[0].internal__read_tags = [read_tags]
-        else:
-            config[0].internal__read_tags = ["cr"]
-
-    return config
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, int) and 0 <= value < len(original_types):
+        return [original_types[value]]
+    return ["cr"]
 
 
 def validate_file_settings(config: settngs.Config[ct_ns]) -> settngs.Config[ct_ns]:
-    config = parse_filter(config)
-
-    config = migrate_settings(config)
+    config[0].Auto_Tag__publisher_filter = parse_publisher_filter(config[0].Auto_Tag__publisher_filter)
+    config[0].internal__write_tags = migrate_tag_ids(config[0].internal__write_tags)
+    config[0].internal__read_tags = migrate_tag_ids(config[0].internal__read_tags)
 
     if config[0].Filename_Parsing__protofolius_issue_number_scheme:
         config[0].Filename_Parsing__allow_issue_start_with_letter = True
@@ -407,8 +382,8 @@ def validate_file_settings(config: settngs.Config[ct_ns]) -> settngs.Config[ct_n
     return config
 
 
-def register_file_settings(parser: settngs.Manager) -> None:
-    parser.add_group("internal", internal, False)
+def register_file_settings(parser: settngs.Manager, default_tag: str) -> None:
+    parser.add_group("internal", partial(internal, default_tag=default_tag), False)
     parser.add_group("Issue Identifier", identifier, False)
     parser.add_group("Filename Parsing", filename, False)
     parser.add_group("Sources", talker, False)

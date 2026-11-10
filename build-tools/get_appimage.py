@@ -5,10 +5,7 @@ import os
 import pathlib
 import platform
 
-try:
-    import niquests as requests
-except ImportError:
-    import requests
+import requests
 
 
 def urlretrieve(url: str, dest: pathlib.Path) -> None:

@@ -9,39 +9,69 @@ from PIL import Image
 from comictaggerlib import imagefetcher
 
 
-@pytest.fixture
-def image_bytes():
+def image_bytes(color):
     stream = io.BytesIO()
-    Image.new("RGB", (2, 2), "red").save(stream, format="PNG")
+    Image.new("RGB", (2, 2), color).save(stream, format="PNG")
     return stream.getvalue()
 
 
-def test_blocking_fetch_caches_verified_image(tmp_path, monkeypatch, image_bytes):
-    monkeypatch.setattr(imagefetcher.ImageFetcher, "qt_available", False)
-    response = Mock(content=image_bytes)
+def test_blocking_fetch_caches_verified_image(tmp_path, monkeypatch):
+    png = image_bytes("red")
+    response = Mock(content=png)
     get = Mock(return_value=response)
     monkeypatch.setattr(imagefetcher.requests, "get", get)
     fetcher = imagefetcher.ImageFetcher(tmp_path)
 
-    assert fetcher.fetch("https://example.com/cover.png", blocking=True) == image_bytes
-    assert fetcher.fetch("https://example.com/cover.png", blocking=True) == image_bytes
+    assert fetcher.fetch("https://example.com/cover.png") == png
+    assert fetcher.fetch("https://example.com/cover.png") == png
     assert get.call_count == 1
-    assert get.call_args.kwargs["timeout"] == 60
     response.raise_for_status.assert_called_once()
 
 
-def test_cached_async_fetch_supports_optional_callback(tmp_path, monkeypatch, image_bytes):
-    pytest.importorskip("PyQt6")
-    monkeypatch.setattr(imagefetcher.ImageFetcher, "qt_available", False)
+def test_corrupt_cache_does_not_prevent_fetching_a_cover(tmp_path, monkeypatch):
+    db_path = tmp_path / "image_url_cache.db"
+    original_data = b"not a SQLite database"
+    db_path.write_bytes(original_data)
+    png = image_bytes("red")
+    monkeypatch.setattr(imagefetcher.requests, "get", Mock(return_value=Mock(content=png)))
+
+    fetcher = imagefetcher.ImageFetcher(tmp_path)
+
+    assert fetcher.fetch("https://example.com/cover.png") == png
+    assert db_path.read_bytes() == original_data
+    assert not list(fetcher.cache_folder.iterdir())
+
+
+def test_replacing_cache_entry_keeps_latest_cover_without_orphaning_old_file(tmp_path):
     fetcher = imagefetcher.ImageFetcher(tmp_path)
     url = "https://example.com/cover.png"
-    fetcher.add_image_to_cache(url, image_bytes)
-    fetcher.qt_available = True
 
-    assert fetcher.fetch(url) == b""
+    fetcher.add_image_to_cache(url, image_bytes("red"))
+    latest = image_bytes("blue")
+    fetcher.add_image_to_cache(url, latest)
 
-    callback = Mock()
-    fetcher.image_fetch_complete = callback
-    assert fetcher.fetch(url) == b""
-    assert callback.call_args.args[0] == url
-    assert bytes(callback.call_args.args[1]) == image_bytes
+    assert fetcher.get_image_from_cache(url) == latest
+    assert len(list(fetcher.cache_folder.iterdir())) == 1
+
+
+def test_cover_widget_ignores_late_response_for_previous_alternate(tmp_path, request):
+    pytest.importorskip("PyQt6")
+    qtbot = request.getfixturevalue("qtbot")
+    from PyQt6 import QtWidgets
+
+    from comictaggerlib.coverimagewidget import CoverImageWidget
+
+    first, second = "https://example.com/one.png", "https://example.com/two.png"
+    red, blue = image_bytes("red"), image_bytes("blue")
+    fetcher = imagefetcher.ImageFetcher(tmp_path)
+    fetcher.add_image_to_cache(first, red)
+    fetcher.add_image_to_cache(second, blue)
+
+    parent = QtWidgets.QWidget()
+    qtbot.addWidget(parent)
+    widget = CoverImageWidget(parent, CoverImageWidget.AltCoverMode, tmp_path)
+    widget.set_url_list([first, second])
+    widget.increment_image()
+    widget.cover_remote_fetch_complete(first, red)
+
+    assert widget.current_pixmap.toImage().pixelColor(0, 0).name() == "#0000ff"

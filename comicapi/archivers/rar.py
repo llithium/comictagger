@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-from comicapi.archivers import Archiver
+from comicapi.archivers.archiver import Archiver, archive_replacement, member_destination, read_archive
 
 try:
     import rarfile
@@ -34,7 +34,8 @@ class RarArchiver(Archiver):
     """RAR implementation"""
 
     enabled = rar_support
-    exe = "rar"
+    default_exe = "rar"
+    exe = default_exe
     supported_extensions = frozenset({".cbr", ".rar"})
 
     _rar: rarfile.RarFile | None = None
@@ -100,44 +101,38 @@ class RarArchiver(Archiver):
         if rarc is None:
             return b""
 
-        tries = 0
-        while tries < 7:
+        for attempt in range(1, 8):
             try:
-                tries = tries + 1
-                data: bytes = rarc.open(archive_file).read()
-                entries = [(rarc.getinfo(archive_file), data)]
-
-                if entries[0][0].file_size != len(entries[0][1]):
-                    logger.info(
-                        "Error reading rar archive [file is not expected size: %d vs %d]  %s :: %s :: tries #%d",
-                        entries[0][0].file_size,
-                        len(entries[0][1]),
-                        self.path,
-                        archive_file,
-                        tries,
-                    )
-                    continue
-
-            except OSError as e:
-                logger.error("Error reading rar archive [%s]: %s :: %s :: tries #%d", e, self.path, archive_file, tries)
-            except Exception as e:
+                with rarc.open(archive_file) as member:
+                    data: bytes = member.read()
+                expected_size = rarc.getinfo(archive_file).file_size
+            except OSError as exc:
+                logger.error(
+                    "Error reading rar archive [%s]: %s :: %s :: tries #%d", exc, self.path, archive_file, attempt
+                )
+                continue
+            except Exception as exc:
                 logger.error(
                     "Unexpected exception reading rar archive [%s]: %s :: %s :: tries #%d",
-                    e,
+                    exc,
                     self.path,
                     archive_file,
-                    tries,
+                    attempt,
                 )
-                break
+                raise OSError(f"Could not read {archive_file} from {self.path}") from exc
 
-            else:
-                # Success. Entries is a list of of tuples:  ( rarinfo, filedata)
-                if len(entries) == 1:
-                    return entries[0][1]
+            if expected_size == len(data):
+                return data
+            logger.info(
+                "Error reading rar archive [file is not expected size: %d vs %d] %s :: %s :: tries #%d",
+                expected_size,
+                len(data),
+                self.path,
+                archive_file,
+                attempt,
+            )
 
-                raise OSError
-
-        raise OSError
+        raise OSError(f"Could not read {archive_file} from {self.path}")
 
     def remove_file(self, archive_file: str) -> bool:
         self._reset()
@@ -231,38 +226,33 @@ class RarArchiver(Archiver):
         """Replace the current archive with one copied from another archive"""
         self._reset()
         try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_path = pathlib.Path(tmp_dir)
-                rar_cwd = tmp_path / "rar"
-                rar_cwd.mkdir(exist_ok=True)
-                rar_path = (tmp_path / self.path.name).with_suffix(".rar")
-                working_dir = os.path.dirname(os.path.abspath(self.path))
-
-                for filename in other_archive.get_filename_list():
-                    (rar_cwd / filename).parent.mkdir(exist_ok=True, parents=True)
-                    data = other_archive.read_file(filename)
-                    if data is not None:
-                        with open(rar_cwd / filename, mode="w+b") as tmp_file:
-                            tmp_file.write(data)
-                result = subprocess.run(
-                    [self.exe, "a", f"-w{working_dir}", "-r", "-c-", str(rar_path.absolute()), "."],
-                    cwd=rar_cwd.absolute(),
-                    startupinfo=STARTUPINFO,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    encoding="utf-8",
-                )
-                if result.returncode != 0:
-                    logger.error(
-                        "Error while copying to rar archive [exitcode: %d]: %s: %s",
-                        result.returncode,
-                        self.path,
-                        result.stderr,
+            with archive_replacement(self.path) as replacement:
+                # Give RAR an explicit extension even when the destination has none.
+                rar_path = replacement.staged.with_suffix(".rar")
+                working_dir = self.path.absolute().parent
+                with tempfile.TemporaryDirectory(dir=rar_path.parent) as directory:
+                    rar_cwd = pathlib.Path(directory)
+                    with read_archive(other_archive) as read:
+                        for filename in other_archive.get_filename_list():
+                            data = read(filename)
+                            if data is not None:
+                                member = member_destination(rar_cwd, filename)
+                                member.parent.mkdir(exist_ok=True, parents=True)
+                                member.write_bytes(data)
+                    subprocess.run(
+                        [self.exe, "a", f"-w{working_dir}", "-r", "-c-", str(rar_path.absolute()), "."],
+                        cwd=rar_cwd.absolute(),
+                        startupinfo=STARTUPINFO,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        encoding="utf-8",
+                        check=True,
                     )
-                    return False
-
-                self.path.unlink(missing_ok=True)
-                shutil.move(rar_path, self.path)
+                if rar_path != replacement.staged:
+                    rar_path.rename(replacement.staged)
+        except subprocess.CalledProcessError as e:
+            logger.error("Error while copying to rar archive [exitcode: %d]: %s: %s", e.returncode, self.path, e.stderr)
+            return False
         except Exception as e:
             logger.exception("Error while copying to rar archive [%s]: from %s to %s", e, other_archive.path, self.path)
             return False
