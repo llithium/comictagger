@@ -24,19 +24,21 @@ def get_talkers(
     talkers: dict[str, ComicTalker] = {}
     metron_location = ""
 
-    def is_metron(name: str, talker: type[ComicTalker]) -> bool:
-        return name == "metron" or "metron" in talker.website.casefold() or "metron" in talker.__module__.casefold()
+    def load_supported_talker(name: str, implementation: type[ComicTalker]) -> ComicTalker | None:
+        if name == "metron" or "metron" in implementation.__module__.casefold():
+            return None
+        talker = implementation(version, cache)
+        return None if "metron" in talker.website.casefold() else talker
 
     for entry in entry_points(group=TALKER_ENTRY_POINT):
         try:
-            talker_cls: type[ComicTalker] = entry.load()
-            if is_metron(entry.name, talker_cls):
+            talker = load_supported_talker(entry.name, entry.load())
+            if talker is None:
                 if entry.dist and not metron_location:
                     metron_location = f"pip package {entry.dist.name}"
                 else:
                     metron_location = f"python module {entry.module}"
                 continue
-            talker = talker_cls(version, cache)
             if talker.id != entry.name:
                 logger.error("Talker ID must be the same as the entry point name")
                 continue
@@ -50,15 +52,15 @@ def get_talkers(
         try:
             if isinstance(plugin, LocalPlugin):
                 name = plugin.name
-                talker_cls = plugin.implementation
-                if is_metron(name, talker_cls):
+                talker = load_supported_talker(name, plugin.implementation)
+                if talker is None:
                     local_metron_location = f"Local package {plugin.path.absolute()}"
                     continue
+                talker_id = plugin.implementation.id
             else:
-                talker_cls = plugin
-                name = talker_cls.id
-            talker = talker_cls(version, cache)
-            talkers[talker_cls.id] = talker
+                name = talker_id = plugin.id
+                talker = plugin(version, cache)
+            talkers[talker_id] = talker
         except Exception:
             logger.exception("Failed to load talker: %s", name)
 

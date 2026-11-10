@@ -18,6 +18,8 @@ import comicapi.genericmetadata
 from comicapi.archivers import archiver as archive_operations
 from comicapi.archivers.folder import FolderArchiver
 from comicapi.archivers.sevenzip import SevenZipArchiver
+from comictaggerlib.cli import CLI
+from comictaggerlib.resulttypes import Status
 from testing.filenames import datadir
 
 
@@ -176,6 +178,47 @@ def test_zip_export_when_hard_links_are_unsupported(tmp_path, monkeypatch):
     with zipfile.ZipFile(destination) as exported:
         assert exported.read("001.jpg") == b"page"
     assert set(tmp_path.iterdir()) == {source, destination}
+
+
+@pytest.mark.parametrize("folder_fallback", [False, True], ids=["file", "folder"])
+def test_unique_export_retries_a_late_collision_without_reading_the_source_again(
+    tmp_path, monkeypatch, folder_fallback, config
+):
+    source = tmp_path / "export"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    archiver = FolderArchiver.open(source)
+    archive = comicapi.comicarchive.ComicArchive(archiver)
+    destination = tmp_path / "export.cbz"
+    destination.write_bytes(b"first export")
+    late_destination = tmp_path / "export (1).cbz"
+    read_file = archiver.read_file
+    reads = []
+
+    def create_destination_during_read(name):
+        reads.append(name)
+        late_destination.write_bytes(b"concurrent export")
+        return read_file(name)
+
+    monkeypatch.setattr(archiver, "read_file", create_destination_during_read)
+    if folder_fallback:
+        if os.name == "nt":
+            pytest.skip("Windows uses an exclusive rename directly")
+        monkeypatch.setattr(os, "link", unsupported_publication)
+        monkeypatch.setattr(archive_operations, "_rename_exclusive", unsupported_publication)
+
+    result = CLI(config.values, {}).export(archive)
+
+    assert result.status == Status.success
+    published = result.renamed_path
+    assert published is not None
+    assert published.name == "export (2).cbz"
+    assert (published.parent.parent if folder_fallback else published.parent) == tmp_path
+    with zipfile.ZipFile(published) as exported:
+        assert exported.read("001.jpg") == b"page"
+    assert destination.read_bytes() == b"first export"
+    assert late_destination.read_bytes() == b"concurrent export"
+    assert reads == ["001.jpg"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows uses an exclusive rename directly")

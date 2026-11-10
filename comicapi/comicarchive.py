@@ -452,9 +452,9 @@ class ComicArchive:
         zip_archiver.path = zip_filename
         return zip_archiver.copy_from_archive(self.archiver, overwrite=overwrite)
 
-    def export_as_new_zip(self, zip_filename: pathlib.Path) -> pathlib.Path | None:
+    def export_as_new_zip(self, zip_filename: pathlib.Path, *, unique: bool = False) -> pathlib.Path | None:
         if self.is_zip():
             return self.path
         zip_archiver = ZipArchiver()
         zip_archiver.path = zip_filename
-        return zip_archiver.export_from_archive(self.archiver)
+        return zip_archiver.export_from_archive(self.archiver, unique=unique)

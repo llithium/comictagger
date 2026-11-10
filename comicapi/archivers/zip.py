@@ -135,17 +135,17 @@ class ZipArchiver(Archiver):
         """Replace the current zip with one copied from another archive"""
         return self._copy_from_archive(other_archive, overwrite=overwrite) is not None
 
-    def export_from_archive(self, other_archive: Archiver) -> pathlib.Path | None:
+    def export_from_archive(self, other_archive: Archiver, *, unique: bool = False) -> pathlib.Path | None:
         """Publish a new ZIP and return its path, including any export folder."""
-        return self._copy_from_archive(other_archive, overwrite=False, allow_export_folder=True)
+        return self._copy_from_archive(other_archive, overwrite=False, allow_export_folder=True, unique=unique)
 
     def _copy_from_archive(
-        self, other_archive: Archiver, *, overwrite: bool, allow_export_folder: bool = False
+        self, other_archive: Archiver, *, overwrite: bool, allow_export_folder: bool = False, unique: bool = False
     ) -> pathlib.Path | None:
         self._filename_list = []
         try:
             with archive_replacement(
-                self.path, overwrite=overwrite, allow_export_folder=allow_export_folder
+                self.path, overwrite=overwrite, allow_export_folder=allow_export_folder, unique=unique
             ) as replacement:
                 with ZipFile(replacement.staged, mode="w", allowZip64=True) as zout, read_archive(
                     other_archive

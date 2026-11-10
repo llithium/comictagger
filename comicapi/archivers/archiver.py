@@ -12,6 +12,8 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext, supp
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from comicapi.utils import file_name_candidates
+
 
 @runtime_checkable
 class Archiver(Protocol):
@@ -207,32 +209,29 @@ def _rename_exclusive(source: pathlib.Path, target: pathlib.Path) -> None:
         raise OSError(code, os.strerror(code), target)
 
 
-def _publish_new_archive(staged: pathlib.Path, path: pathlib.Path, *, allow_export_folder: bool) -> pathlib.Path:
-    if os.name == "nt":
-        return staged.rename(path)
+_EXCLUSIVE_UNSUPPORTED = (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL)
 
-    unsupported = (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL)
+
+def _publish_at_path(staged: pathlib.Path, path: pathlib.Path) -> None:
+    if os.name == "nt":
+        staged.rename(path)
+        return
+
     try:
         os.link(staged, path)
     except OSError as error:
         # FAT drivers can also report EPERM when hard links are unsupported.
-        if error.errno not in (*unsupported, errno.EPERM):
+        if error.errno not in (*_EXCLUSIVE_UNSUPPORTED, errno.EPERM):
             raise
-    else:
-        return path
-
-    try:
         _rename_exclusive(staged, path)
-    except OSError as error:
-        if not allow_export_folder or error.errno not in unsupported:
-            raise
-    else:
-        return path
 
-    if os.path.lexists(path):
-        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+
+def _publish_export_folder(staged: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
     folder = pathlib.Path(tempfile.mkdtemp(prefix="ComicTagger-export-", dir=path.parent))
+    named_archive = staged.with_name(path.name)
     try:
+        if named_archive != staged:
+            staged.rename(named_archive)
         # A directory rename can only replace an empty directory. The finished
         # CBZ becomes visible inside it in one step.
         staged.parent.replace(folder)
@@ -243,6 +242,28 @@ def _publish_new_archive(staged: pathlib.Path, path: pathlib.Path, *, allow_expo
     return folder / path.name
 
 
+def _publish_new_archive(
+    staged: pathlib.Path, path: pathlib.Path, *, allow_export_folder: bool, unique: bool
+) -> pathlib.Path:
+    candidates = file_name_candidates(path)
+    while True:
+        candidate = next(candidates)
+        try:
+            _publish_at_path(staged, candidate)
+        except FileExistsError:
+            if not unique:
+                raise
+        except OSError as error:
+            if not allow_export_folder or os.name == "nt" or error.errno not in _EXCLUSIVE_UNSUPPORTED:
+                raise
+            if not os.path.lexists(candidate):
+                return _publish_export_folder(staged, candidate)
+            if not unique:
+                raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), candidate) from None
+        else:
+            return candidate
+
+
 @dataclass
 class ArchiveReplacement:
     staged: pathlib.Path
@@ -251,7 +272,7 @@ class ArchiveReplacement:
 
 @contextmanager
 def archive_replacement(
-    path: pathlib.Path, *, overwrite: bool = True, allow_export_folder: bool = False
+    path: pathlib.Path, *, overwrite: bool = True, allow_export_folder: bool = False, unique: bool = False
 ) -> Iterator[ArchiveReplacement]:
     """Publish a closed, complete archive when the writer finishes successfully."""
     mode = None
@@ -267,5 +288,5 @@ def archive_replacement(
             replacement.published = replacement.staged.replace(path)
         else:
             replacement.published = _publish_new_archive(
-                replacement.staged, path, allow_export_folder=allow_export_folder
+                replacement.staged, path, allow_export_folder=allow_export_folder, unique=unique
             )

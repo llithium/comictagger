@@ -3,14 +3,18 @@ from __future__ import annotations
 import importlib.metadata
 import sys
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+import comictalker
 from comicapi import comicarchive
 from comicapi.archivers import ZipArchiver
+from comicapi.pluginloader import LocalPlugin
 from comicapi.tags.comicrack import ComicRack
 from comictaggerlib.ctsettings.plugin_finder import find_plugins
+from comictalker import ComicTalker
 
 
 @pytest.mark.parametrize("group", ["comicapi.archiver", "comicapi.tags"])
@@ -69,3 +73,39 @@ def test_app_plugins_can_override_previously_loaded_defaults(monkeypatch):
 
     assert comicarchive.archivers[0] is LocalArchiver
     assert isinstance(comicarchive.tags["cr"], LocalTag)
+
+
+@pytest.mark.parametrize("installed", [True, False], ids=["installed", "local-wheel"])
+def test_talker_discovery_reads_the_instance_website(monkeypatch, tmp_path, installed):
+    class PropertyTalker(ComicTalker):
+        id = "property"
+
+        @property
+        def website(self):
+            return "https://example.com"
+
+    class ConfiguredTalker(ComicTalker):
+        id = "configured"
+
+        def __init__(self, version, cache_folder):
+            super().__init__(version, cache_folder)
+            self.website = "https://metron.example.com"
+
+    classes = (PropertyTalker, ConfiguredTalker)
+    local_plugins = []
+    if installed:
+        entries = [
+            SimpleNamespace(name=talker.id, module="test_plugin", dist=None, load=Mock(return_value=talker))
+            for talker in classes
+        ]
+        expected_location = "python module test_plugin"
+    else:
+        entries = []
+        local_plugins = [LocalPlugin(talker.id, tmp_path / f"{talker.id}.whl", talker) for talker in classes]
+        expected_location = f"Local package {tmp_path / 'configured.whl'}"
+    monkeypatch.setattr(comictalker, "entry_points", lambda **kwargs: entries)
+
+    talkers, metron_location = comictalker.get_talkers("test", tmp_path, local_plugins=local_plugins)
+
+    assert list(talkers) == ["property"]
+    assert metron_location == expected_location

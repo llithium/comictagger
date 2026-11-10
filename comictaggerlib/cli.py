@@ -599,17 +599,16 @@ class CLI:
 
         filename_path = ca.path
         new_file = filename_path.with_suffix(".cbz")
+        unique = not self.config.Runtime_Options__abort_on_conflict
 
-        if self.config.Runtime_Options__abort_on_conflict and new_file.exists():
+        if not unique and new_file.exists():
             self.output("%s%s already exists in the that folder.", msg_hdr, new_file.name)
             return Result(Action.export, Status.write_failure, ca.path)
-
-        new_file = utils.unique_file(new_file)
 
         delete_success = False
         export_success = False
         if not self.config.Runtime_Options__dryrun:
-            if (exported_path := ca.export_as_new_zip(new_file)) is not None:
+            if (exported_path := ca.export_as_new_zip(new_file, unique=unique)) is not None:
                 new_file = exported_path
                 export_success = True
                 if self.config.Runtime_Options__delete_original:
@@ -619,6 +618,8 @@ class CLI:
                     except OSError:
                         logger.exception("%sError deleting original archive after export", msg_hdr)
         else:
+            if unique:
+                new_file = utils.unique_file(new_file)
             msg = msg_hdr + f"Dry-run:  Would try to create {os.path.split(new_file)[1]}"
             if self.config.Runtime_Options__delete_original:
                 msg += " and delete original."

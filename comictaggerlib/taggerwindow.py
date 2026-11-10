@@ -650,14 +650,12 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if export_name.exists() and export_config.conflict == ExportConflictOpts.DONT_CREATE:
                 export = False
                 skipped_list.append(ca.path)
-            elif export_config.conflict == ExportConflictOpts.CREATE_UNIQUE:
-                export_name = utils.unique_file(export_name)
-
             if export:
                 logger.debug("Exporting %s to %s", ca.path, export_name)
-                if (exported_path := ca.export_as_new_zip(export_name)) is not None:
+                unique = export_config.conflict == ExportConflictOpts.CREATE_UNIQUE
+                if (exported_path := ca.export_as_new_zip(export_name, unique=unique)) is not None:
                     success_count += 1
-                    if exported_path != export_name:
+                    if exported_path.parent != export_name.parent:
                         folder_exports.append(exported_path)
                     if export_config.add_to_list:
                         new_archives_to_add.append(str(exported_path))

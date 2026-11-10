@@ -24,9 +24,10 @@ import pathlib
 import platform
 import sys
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from enum import Enum, auto
 from functools import cache
+from itertools import count
 from shutil import which  # noqa: F401
 from typing import Any, TypeVar, cast
 
@@ -558,14 +559,14 @@ def titles_match(search_title: str, record_title: str, threshold: int = 90) -> b
     return True
 
 
+def file_name_candidates(file_name: pathlib.Path) -> Iterator[pathlib.Path]:
+    yield file_name
+    for counter in count(1):
+        yield file_name.with_stem(f"{file_name.stem} ({counter})")
+
+
 def unique_file(file_name: pathlib.Path) -> pathlib.Path:
-    name = file_name.stem
-    counter = 1
-    while True:
-        if not file_name.exists():
-            return file_name
-        file_name = file_name.with_stem(name + " (" + str(counter) + ")")
-        counter += 1
+    return next(candidate for candidate in file_name_candidates(file_name) if not candidate.exists())
 
 
 def parse_version(s: str) -> tuple[int, int, int]:
