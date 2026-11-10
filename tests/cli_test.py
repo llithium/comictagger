@@ -17,12 +17,28 @@ def test_export_reports_failed_archive_conversion(config, tmp_path):
     archive = Mock()
     archive.path = tmp_path / "book.cbr"
     archive.is_zip.return_value = False
-    archive.export_as_zip.return_value = False
+    archive.export_as_new_zip.return_value = None
 
     result = cli.export(archive)
 
     assert result.action == Action.export
     assert result.status == Status.write_failure
+
+
+def test_export_reports_the_actual_export_folder(config, tmp_path, capsys):
+    config, _ = config
+    cli = comictaggerlib.cli.CLI(config, {})
+    archive = Mock()
+    archive.path = tmp_path / "book.cbr"
+    archive.is_zip.return_value = False
+    exported_path = tmp_path / "ComicTagger-export-test" / "book.cbz"
+    archive.export_as_new_zip.return_value = exported_path
+
+    result = cli.export(archive)
+
+    assert result.status == Status.success
+    assert result.renamed_path == exported_path
+    assert str(exported_path.relative_to(tmp_path)) in capsys.readouterr().out
 
 
 def test_online_tag_assume_issue_one_forwards_query_metadata(config, cbz, monkeypatch):

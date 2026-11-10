@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
 import pathlib
+import stat
+import sys
 import tempfile
 from collections.abc import Callable, Collection, Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 
@@ -178,14 +183,89 @@ def member_destination(root: pathlib.Path, name: str) -> pathlib.Path:
     return destination
 
 
-@contextmanager
-def archive_replacement(path: pathlib.Path, *, overwrite: bool = True) -> Iterator[pathlib.Path]:
-    """Publish a closed, complete archive when the writer finishes successfully."""
-    with tempfile.TemporaryDirectory(dir=path.parent) as directory:
-        staged = pathlib.Path(directory) / path.name
-        yield staged
-        if overwrite:
-            staged.replace(path)
+def _rename_exclusive(source: pathlib.Path, target: pathlib.Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    args: tuple[int | bytes, ...]
+    try:
+        if sys.platform == "darwin":
+            rename = libc.renamex_np
+            rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            args = (os.fsencode(source), os.fsencode(target), 0x4)  # RENAME_EXCL
+        elif sys.platform == "linux":
+            rename = libc.renameat2
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            at_fdcwd = -100
+            args = (at_fdcwd, os.fsencode(source), at_fdcwd, os.fsencode(target), 1)  # RENAME_NOREPLACE
         else:
-            # Publishing with a hard link keeps the final name absent until the archive is complete.
-            os.link(staged, path)
+            raise AttributeError("exclusive rename")
+    except AttributeError:
+        raise OSError(errno.ENOSYS, "Exclusive rename is unavailable", target) from None
+
+    rename.restype = ctypes.c_int
+    if rename(*args) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), target)
+
+
+def _publish_new_archive(staged: pathlib.Path, path: pathlib.Path, *, allow_export_folder: bool) -> pathlib.Path:
+    if os.name == "nt":
+        return staged.rename(path)
+
+    unsupported = (errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL)
+    try:
+        os.link(staged, path)
+    except OSError as error:
+        # FAT drivers can also report EPERM when hard links are unsupported.
+        if error.errno not in (*unsupported, errno.EPERM):
+            raise
+    else:
+        return path
+
+    try:
+        _rename_exclusive(staged, path)
+    except OSError as error:
+        if not allow_export_folder or error.errno not in unsupported:
+            raise
+    else:
+        return path
+
+    if os.path.lexists(path):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="ComicTagger-export-", dir=path.parent))
+    try:
+        # A directory rename can only replace an empty directory. The finished
+        # CBZ becomes visible inside it in one step.
+        staged.parent.replace(folder)
+    except OSError:
+        with suppress(OSError):
+            folder.rmdir()
+        raise
+    return folder / path.name
+
+
+@dataclass
+class ArchiveReplacement:
+    staged: pathlib.Path
+    published: pathlib.Path | None = None
+
+
+@contextmanager
+def archive_replacement(
+    path: pathlib.Path, *, overwrite: bool = True, allow_export_folder: bool = False
+) -> Iterator[ArchiveReplacement]:
+    """Publish a closed, complete archive when the writer finishes successfully."""
+    mode = None
+    if overwrite:
+        with suppress(FileNotFoundError):
+            mode = stat.S_IMODE(path.stat().st_mode)
+    with tempfile.TemporaryDirectory(dir=path.parent) as directory:
+        replacement = ArchiveReplacement(pathlib.Path(directory) / path.name)
+        yield replacement
+        if overwrite:
+            if mode is not None:
+                replacement.staged.chmod(mode)
+            replacement.published = replacement.staged.replace(path)
+        else:
+            replacement.published = _publish_new_archive(
+                replacement.staged, path, allow_export_folder=allow_export_folder
+            )

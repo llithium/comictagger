@@ -31,23 +31,30 @@ def test_export_dialog_is_ready_before_post_show_work(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("conflict", "existing", "success", "expected_name"),
+    ("conflict", "existing", "success", "expected_name", "export_folder"),
     [
-        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz"),
-        (ExportConflictOpts.DONT_CREATE, True, True, None),
-        (ExportConflictOpts.CREATE_UNIQUE, True, True, "comic (1).cbz"),
-        (ExportConflictOpts.DONT_CREATE, False, False, "comic.cbz"),
+        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz", None),
+        (ExportConflictOpts.DONT_CREATE, True, True, None, None),
+        (ExportConflictOpts.CREATE_UNIQUE, True, True, "comic (1).cbz", None),
+        (ExportConflictOpts.DONT_CREATE, False, False, "comic.cbz", None),
+        (ExportConflictOpts.DONT_CREATE, False, True, "comic.cbz", "ComicTagger-export-test"),
     ],
 )
-def test_export_conflict_and_source_deletion(tmp_path, monkeypatch, conflict, existing, success, expected_name):
+def test_export_conflict_and_source_deletion(
+    tmp_path, monkeypatch, conflict, existing, success, expected_name, export_folder
+):
     source = tmp_path / "comic.cbr"
     source.write_bytes(b"source")
     destination = tmp_path / "comic.cbz"
     if existing:
         destination.write_bytes(b"existing")
 
+    exported_path = (tmp_path / (export_folder or "") / expected_name) if expected_name and success else None
     archive = SimpleNamespace(
-        path=source, is_zip=lambda: False, get_number_of_pages=lambda: 1, export_as_zip=Mock(return_value=success)
+        path=source,
+        is_zip=lambda: False,
+        get_number_of_pages=lambda: 1,
+        export_as_new_zip=Mock(return_value=exported_path),
     )
     selection = SimpleNamespace(
         get_selected_archive_list=lambda: [archive], remove_archive_list=Mock(), add_path_list=Mock()
@@ -59,13 +66,13 @@ def test_export_conflict_and_source_deletion(tmp_path, monkeypatch, conflict, ex
     taggerwindow.TaggerWindow._repackage_archive(window, ExportConfig(conflict, True, True))
 
     if expected_name is None:
-        archive.export_as_zip.assert_not_called()
+        archive.export_as_new_zip.assert_not_called()
     else:
-        archive.export_as_zip.assert_called_once_with(tmp_path / expected_name, overwrite=False)
+        archive.export_as_new_zip.assert_called_once_with(tmp_path / expected_name)
     assert source.exists() is (expected_name is None or not success)
     selection.remove_archive_list.assert_called_once_with([archive] if expected_name and success else [])
-    selection.add_path_list.assert_called_once_with(
-        [str(tmp_path / expected_name)] if expected_name and success else []
-    )
+    selection.add_path_list.assert_called_once_with([str(exported_path)] if exported_path else [])
+    if export_folder:
+        assert str(exported_path) in taggerwindow.LogWindow.return_value.set_text.call_args.args[0]
     if existing:
         assert destination.read_bytes() == b"existing"

@@ -630,6 +630,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         archives_to_remove = []
         skipped_list = []
         failed_list = []
+        folder_exports = []
         success_count = 0
         logger.debug("Exporting %d comics to zip", len(to_zip))
 
@@ -654,10 +655,12 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
             if export:
                 logger.debug("Exporting %s to %s", ca.path, export_name)
-                if ca.export_as_zip(export_name, overwrite=False):
+                if (exported_path := ca.export_as_new_zip(export_name)) is not None:
                     success_count += 1
+                    if exported_path != export_name:
+                        folder_exports.append(exported_path)
                     if export_config.add_to_list:
-                        new_archives_to_add.append(str(export_name))
+                        new_archives_to_add.append(str(exported_path))
                     if export_config.delete_original:
                         try:
                             ca.path.unlink(missing_ok=True)
@@ -675,6 +678,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.fileSelectionList.remove_archive_list(archives_to_remove)
 
         summary = f"Successfully created {success_count} Zip archive(s)."
+        if folder_exports:
+            summary += "\n\nArchives exported to separate folders:\n"
+            summary += "\n".join(f"\t{path}" for path in folder_exports)
         if skipped_list:
             summary += f"\n\nThe following {len(skipped_list)} archive(s) were skipped due to file name conflicts:\n"
             for f in skipped_list:

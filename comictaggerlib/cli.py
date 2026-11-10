@@ -609,7 +609,8 @@ class CLI:
         delete_success = False
         export_success = False
         if not self.config.Runtime_Options__dryrun:
-            if ca.export_as_zip(new_file, overwrite=False):
+            if (exported_path := ca.export_as_new_zip(new_file)) is not None:
+                new_file = exported_path
                 export_success = True
                 if self.config.Runtime_Options__delete_original:
                     try:
@@ -626,7 +627,7 @@ class CLI:
 
         msg = msg_hdr
         if export_success:
-            msg += f"Archive exported successfully to: {os.path.split(new_file)[1]}"
+            msg += f"Archive exported successfully to: {new_file.relative_to(filename_path.parent)}"
             if self.config.Runtime_Options__delete_original and delete_success:
                 msg += " (Original deleted) "
             elif self.config.Runtime_Options__delete_original:

@@ -4,6 +4,9 @@ import errno
 import os
 import pathlib
 import shutil
+import stat
+import sys
+import zipfile
 from importlib.metadata import entry_points
 
 import pytest
@@ -12,6 +15,7 @@ import comicapi.archivers.rar
 import comicapi.archivers.zip
 import comicapi.comicarchive
 import comicapi.genericmetadata
+from comicapi.archivers import archiver as archive_operations
 from comicapi.archivers.folder import FolderArchiver
 from comicapi.archivers.sevenzip import SevenZipArchiver
 from testing.filenames import datadir
@@ -101,7 +105,39 @@ def test_failed_seven_zip_replacement_preserves_original_archive(cbz, tmp_path, 
     assert set(tmp_path.iterdir()) == {path}
 
 
-def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path, monkeypatch):
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file mode")
+@pytest.mark.parametrize("remove", [False, True], ids=["replace-tag", "remove-tag"])
+def test_seven_zip_rewrite_preserves_private_mode(tmp_path, remove):
+    py7zr = pytest.importorskip("py7zr")
+    path = tmp_path / "private.cb7"
+    with py7zr.SevenZipFile(path, "w") as output:
+        output.writestr(b"page", "001.jpg")
+        output.writestr(b"<ComicInfo/>", "ComicInfo.xml")
+    archive = SevenZipArchiver.open(path)
+    path.chmod(0o600)
+
+    old_umask = os.umask(0o022)
+    try:
+        if remove:
+            assert archive.remove_file("ComicInfo.xml")
+            assert "ComicInfo.xml" not in archive.get_filename_list()
+        else:
+            content = b"<ComicInfo><Title>Updated</Title></ComicInfo>"
+            assert archive.write_file("ComicInfo.xml", content)
+            assert archive.read_file("ComicInfo.xml") == content
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert archive.read_file("001.jpg") == b"page"
+
+
+def unsupported_publication(*args):
+    raise OSError(errno.EOPNOTSUPP, "exclusive file publication is not supported")
+
+
+@pytest.mark.parametrize("allow_folder", [False, True])
+def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path, monkeypatch, allow_folder):
     source = tmp_path / "source"
     source.mkdir()
     (source / "001.jpg").write_bytes(b"page")
@@ -116,25 +152,52 @@ def test_zip_export_does_not_replace_a_destination_created_during_copy(tmp_path,
 
     monkeypatch.setattr(archiver, "read_file", create_destination_during_read)
 
-    assert not archive.export_as_zip(destination, overwrite=False)
+    if allow_folder:
+        monkeypatch.setattr(os, "link", unsupported_publication)
+        monkeypatch.setattr(archive_operations, "_rename_exclusive", unsupported_publication)
+        assert archive.export_as_new_zip(destination) is None
+    else:
+        assert not archive.export_as_zip(destination, overwrite=False)
     assert destination.read_bytes() == b"another export"
     assert set(tmp_path.iterdir()) == {source, destination}
 
 
-def test_zip_export_leaves_no_output_if_exclusive_publication_is_unsupported(tmp_path, monkeypatch):
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux", "win32"), reason="requires a native exclusive rename")
+def test_zip_export_when_hard_links_are_unsupported(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
     (source / "001.jpg").write_bytes(b"page")
     archive = comicapi.comicarchive.ComicArchive(FolderArchiver.open(source))
     destination = tmp_path / "export.cbz"
 
-    def unsupported_link(*args):
-        raise OSError(errno.EOPNOTSUPP, "hard links are not supported")
+    monkeypatch.setattr(os, "link", unsupported_publication)
 
-    monkeypatch.setattr(os, "link", unsupported_link)
+    assert archive.export_as_zip(destination, overwrite=False)
+    with zipfile.ZipFile(destination) as exported:
+        assert exported.read("001.jpg") == b"page"
+    assert set(tmp_path.iterdir()) == {source, destination}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses an exclusive rename directly")
+def test_zip_export_uses_a_sibling_folder_if_neither_exclusive_operation_is_available(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "001.jpg").write_bytes(b"page")
+    archive = comicapi.comicarchive.ComicArchive(FolderArchiver.open(source))
+    destination = tmp_path / "export.cbz"
+    monkeypatch.setattr(os, "link", unsupported_publication)
+    monkeypatch.setattr(archive_operations, "_rename_exclusive", unsupported_publication)
 
     assert not archive.export_as_zip(destination, overwrite=False)
     assert set(tmp_path.iterdir()) == {source}
+
+    exported_path = archive.export_as_new_zip(destination)
+    assert exported_path is not None
+    assert exported_path.name == destination.name
+    assert exported_path.parent.parent == destination.parent
+    with zipfile.ZipFile(exported_path) as exported:
+        assert exported.read("001.jpg") == b"page"
+    assert set(tmp_path.iterdir()) == {source, exported_path.parent}
 
 
 def test_write_cr(tmp_comic):

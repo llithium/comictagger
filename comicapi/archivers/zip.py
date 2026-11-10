@@ -119,8 +119,8 @@ class ZipArchiver(Archiver):
         """Rewrite the archive without the named members."""
         self._filename_list = []
         try:
-            with archive_replacement(self.path) as staged:
-                with ZipFile(self.path, mode="r") as zin, ZipFile(staged, "w", allowZip64=True) as zout:
+            with archive_replacement(self.path) as replacement:
+                with ZipFile(self.path, mode="r") as zin, ZipFile(replacement.staged, "w", allowZip64=True) as zout:
                     for item in zin.infolist():
                         if item.filename not in exclude_list:
                             zout.writestr(item, zin.read(item.filename))
@@ -133,10 +133,23 @@ class ZipArchiver(Archiver):
 
     def copy_from_archive(self, other_archive: Archiver, *, overwrite: bool = True) -> bool:
         """Replace the current zip with one copied from another archive"""
+        return self._copy_from_archive(other_archive, overwrite=overwrite) is not None
+
+    def export_from_archive(self, other_archive: Archiver) -> pathlib.Path | None:
+        """Publish a new ZIP and return its path, including any export folder."""
+        return self._copy_from_archive(other_archive, overwrite=False, allow_export_folder=True)
+
+    def _copy_from_archive(
+        self, other_archive: Archiver, *, overwrite: bool, allow_export_folder: bool = False
+    ) -> pathlib.Path | None:
         self._filename_list = []
         try:
-            with archive_replacement(self.path, overwrite=overwrite) as staged:
-                with ZipFile(staged, mode="w", allowZip64=True) as zout, read_archive(other_archive) as read:
+            with archive_replacement(
+                self.path, overwrite=overwrite, allow_export_folder=allow_export_folder
+            ) as replacement:
+                with ZipFile(replacement.staged, mode="w", allowZip64=True) as zout, read_archive(
+                    other_archive
+                ) as read:
                     for filename in other_archive.get_filename_list():
                         data = read(filename)
                         if data is not None:
@@ -146,9 +159,8 @@ class ZipArchiver(Archiver):
                         zout.comment = comment.encode("utf-8")
         except Exception as e:
             logger.error("Error while copying to zip archive [%s]: from %s to %s", e, other_archive.path, self.path)
-            return False
-        else:
-            return True
+            return None
+        return replacement.published
 
     def is_writable(self) -> bool:
         return True

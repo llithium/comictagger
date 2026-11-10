@@ -75,8 +75,11 @@ class SevenZipArchiver(Archiver):
     def _rewrite(self, exclude_list: list[str], replacement: tuple[str, bytes] | None = None) -> bool:
         self._filename_list = []
         try:
-            with archive_replacement(self.path) as staged:
-                with py7zr.SevenZipFile(self.path, mode="r") as zin, py7zr.SevenZipFile(staged, mode="w") as zout:
+            with archive_replacement(self.path) as replacement_file:
+                with (
+                    py7zr.SevenZipFile(self.path, mode="r") as zin,
+                    py7zr.SevenZipFile(replacement_file.staged, mode="w") as zout,
+                ):
                     # Read retained members together because 7z compression can be solid.
                     targets = [name for name in zin.getnames() if name not in exclude_list]
                     for filename, buffer in zin.read(targets).items():
@@ -92,8 +95,8 @@ class SevenZipArchiver(Archiver):
     def copy_from_archive(self, other_archive: Archiver) -> bool:
         self._filename_list = []
         try:
-            with archive_replacement(self.path) as staged:
-                with py7zr.SevenZipFile(staged, "w") as zout, read_archive(other_archive) as read:
+            with archive_replacement(self.path) as replacement:
+                with py7zr.SevenZipFile(replacement.staged, "w") as zout, read_archive(other_archive) as read:
                     for filename in other_archive.get_filename_list():
                         data = read(filename)
                         if data is not None:
