@@ -41,9 +41,17 @@ class ImageFetcher:
     def __init__(self, cache_folder: pathlib.Path) -> None:
         self.db_file = cache_folder / "image_url_cache.db"
         self.cache_folder = cache_folder / "image_cache"
-        self.cache_folder.mkdir(parents=True, exist_ok=True)
-        with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
-            con.execute("CREATE TABLE IF NOT EXISTS Images(url TEXT,filename TEXT,timestamp TEXT,PRIMARY KEY (url))")
+        try:
+            self.cache_folder.mkdir(parents=True, exist_ok=True)
+            with contextlib.closing(sqlite3.connect(self.db_file)) as con, con:
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS Images(url TEXT,filename TEXT,timestamp TEXT,PRIMARY KEY (url))"
+                )
+        except (OSError, sqlite3.Error):
+            logger.warning("Cover cache unavailable at %s. Continuing without caching.", self.db_file, exc_info=True)
+            self._cache_available = False
+        else:
+            self._cache_available = True
 
     def fetch(self, url: str) -> bytes:
         if cached := self.get_image_from_cache(url):
@@ -67,8 +75,9 @@ class ImageFetcher:
         return b""
 
     def add_image_to_cache(self, url: str, image_data: bytes) -> bytes:
-        if not (image_data := self._verify_image(url, image_data)):
-            return b""
+        image_data = self._verify_image(url, image_data)
+        if not image_data or not self._cache_available:
+            return image_data
 
         filename: str | None = None
         try:
@@ -100,6 +109,8 @@ class ImageFetcher:
                 logger.warning("Could not remove cached image %s", path, exc_info=True)
 
     def get_image_from_cache(self, url: str) -> bytes:
+        if not self._cache_available:
+            return b""
         try:
             with contextlib.closing(sqlite3.connect(self.db_file)) as con:
                 row = con.execute("SELECT filename FROM Images WHERE url=?", (url,)).fetchone()

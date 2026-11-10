@@ -23,7 +23,6 @@ import settngs
 from PyQt6 import QtCore, QtWidgets, uic
 from PyQt6.QtGui import QColorConstants
 
-from comicapi import utils
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.ctsettings import ct_ns
@@ -205,14 +204,13 @@ class RenameWindow(QtWidgets.QDialog):
             if not archive.is_writable(check_archive_status=False):
                 continue
 
-            target = plan.available_target()
+            target = plan.target
             try:
+                target = plan.available_target()
                 plan.apply(target)
             except OSError as e:
                 logger.exception("Failed to rename comic archive: %s", archive.path)
-                failed_renames.append(
-                    (utils.path_to_short_str(archive.path), utils.path_to_short_str(archive.path, target), e)
-                )
+                failed_renames.append((str(archive.path), str(target), e))
 
         if failed_renames:
             OptionalMessageDialog.critical(

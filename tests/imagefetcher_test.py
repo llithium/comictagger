@@ -28,6 +28,20 @@ def test_blocking_fetch_caches_verified_image(tmp_path, monkeypatch):
     response.raise_for_status.assert_called_once()
 
 
+def test_corrupt_cache_does_not_prevent_fetching_a_cover(tmp_path, monkeypatch):
+    db_path = tmp_path / "image_url_cache.db"
+    original_data = b"not a SQLite database"
+    db_path.write_bytes(original_data)
+    png = image_bytes("red")
+    monkeypatch.setattr(imagefetcher.requests, "get", Mock(return_value=Mock(content=png)))
+
+    fetcher = imagefetcher.ImageFetcher(tmp_path)
+
+    assert fetcher.fetch("https://example.com/cover.png") == png
+    assert db_path.read_bytes() == original_data
+    assert not list(fetcher.cache_folder.iterdir())
+
+
 def test_replacing_cache_entry_keeps_latest_cover_without_orphaning_old_file(tmp_path):
     fetcher = imagefetcher.ImageFetcher(tmp_path)
     url = "https://example.com/cover.png"

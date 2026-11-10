@@ -6,6 +6,7 @@ import pytest
 
 import comicapi.genericmetadata
 import testing.comicdata
+from comicapi.archivers.folder import FolderArchiver
 from comicapi.tags.comicrack import ComicRack
 from comictaggerlib.md import prepare_metadata
 
@@ -82,6 +83,23 @@ def test_comicrack_persists_series_start_year(mock_version, tmp_comic):
 
     assert tag.write_tags(metadata, tmp_comic.archiver)
     assert tag.read_tags(tmp_comic.archiver).series_start_year == 2024
+
+
+def test_comicrack_replaces_a_tag_that_cannot_be_read(tmp_path, monkeypatch, mock_version):
+    tag = ComicRack(mock_version[0])
+    archive = FolderArchiver.open(tmp_path)
+    xml_path = tmp_path / "ComicInfo.xml"
+    xml_path.write_bytes(b"<ComicInfo><Series>Old series</Series></ComicInfo>")
+
+    def deny_read(name):
+        assert name == "ComicInfo.xml"
+        raise PermissionError(name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(archive, "read_file", deny_read)
+        assert tag.write_tags(comicapi.genericmetadata.GenericMetadata(series="New series"), archive)
+
+    assert tag.read_tags(archive).series == "New series"
 
 
 @pytest.mark.parametrize("metadata, expected", testing.comicdata.metadata_prepared)

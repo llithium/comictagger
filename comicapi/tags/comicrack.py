@@ -165,7 +165,12 @@ class ComicRack(Tag):
             return False
 
         try:
-            root = self._convert_metadata_to_xml(metadata, self._read_xml(archive))
+            try:
+                existing_xml = self._read_xml(archive)
+            except OSError:
+                logger.debug("Unable to read existing %s in %s", self.file, archive.path, exc_info=True)
+                existing_xml = None
+            root = self._convert_metadata_to_xml(metadata, existing_xml)
             return archive.write_file(self.file, ET.tostring(root, encoding="utf-8", xml_declaration=True))
         except Exception:
             logger.exception("Unable to write %s in %s", self.file, archive.path)

@@ -570,20 +570,20 @@ class CLI:
             logger.exception("Formatter failure: %s metadata: %s", self.config.File_Rename__template, md)
             return Result(Action.rename, Status.rename_failure, original_path, md=md)
 
-        full_path = plan.available_target()
-        if full_path == ca.path:
+        full_path = plan.target
+        try:
+            full_path = plan.available_target()
+            if full_path != original_path and not self.config.Runtime_Options__dryrun:
+                plan.apply(full_path)
+        except OSError:
+            logger.exception("Failed to rename comic archive: %s", original_path)
+            return Result(Action.rename, Status.write_failure, original_path, full_path, md=md)
+
+        if full_path == original_path:
             self.output(msg_hdr + "Filename is already good!")
             return Result(Action.rename, Status.success, original_path, full_path, md=md)
 
-        suffix = ""
-        if not self.config.Runtime_Options__dryrun:
-            try:
-                plan.apply(full_path)
-            except OSError:
-                logger.exception("Failed to rename comic archive: %s", ca.path)
-                return Result(Action.rename, Status.write_failure, original_path, full_path, md=md)
-        else:
-            suffix = " (dry-run, no change)"
+        suffix = " (dry-run, no change)" if self.config.Runtime_Options__dryrun else ""
 
         self.output(f"renamed '{original_path.name}' -> '{full_path.name}' {suffix}")
         return Result(Action.rename, Status.success, original_path, full_path, tags_read=tags_read, md=md)
