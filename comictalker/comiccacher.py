@@ -121,6 +121,15 @@ class ComicCacher:
                 complete  BOOL,
                 PRIMARY KEY (id, source))""")
 
+            # Warm lookups expire old entries on every read. Index both expiry
+            # and lookup keys so that cost does not grow with the entire cache.
+            for table in ("SeriesSearchCache", "Series", "Issues"):
+                cur.execute(f"CREATE INDEX IF NOT EXISTS {table}_timestamp ON {table} (timestamp)")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS SeriesSearchCache_lookup ON SeriesSearchCache (search_term, source)"
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS Issues_series ON Issues (series_id, source)")
+
     def expire_stale_records(self, cur: sqlite3.Cursor, table: str, expiration: datetime.datetime) -> None:
         if "'" in table:
             raise ValueError("Single quotes not allowed in table names")
@@ -157,7 +166,8 @@ class ComicCacher:
             cur.execute(
                 """SELECT * FROM SeriesSearchCache INNER JOIN Series on
                  SeriesSearchCache.id=Series.id AND SeriesSearchCache.source=Series.source
-                 WHERE search_term=? AND SeriesSearchCache.source=?""",
+                 WHERE search_term=? AND SeriesSearchCache.source=?
+                 ORDER BY Series.rowid""",
                 [search_term.casefold(), source],
             )
 

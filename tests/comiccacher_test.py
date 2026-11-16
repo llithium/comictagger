@@ -76,3 +76,71 @@ def test_cache_overwrite(comic_cache, series_info):
 
     # Validate that the Series marked complete is still in the cache
     assert vi == cache_result
+
+
+def test_existing_cache_gains_lookup_and_expiration_indexes(tmp_path):
+    cache = comictalker.comiccacher.ComicCacher(tmp_path, "same-version")
+    series = comictalker.comiccacher.Series("1", b"series")
+    issue = comictalker.comiccacher.Issue("7", "1", b"issue")
+    cache.add_search_results("test", "search", [series], True)
+    cache.add_issues_info("test", [issue], True)
+    with sqlite3.connect(cache.db_file) as con:
+        # Simulate the schema used before lookup indexes were introduced.
+        indexes = con.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL").fetchall()
+        for (name,) in indexes:
+            con.execute(f'DROP INDEX "{name}"')
+
+    for _ in range(2):
+        reopened = comictalker.comiccacher.ComicCacher(tmp_path, "same-version")
+        assert reopened.get_search_results("test", "search") == [(series, True)]
+        assert reopened.get_series_issues_info("1", "test") == [(issue, True)]
+        with sqlite3.connect(cache.db_file) as con:
+            queries = [
+                "SELECT * FROM Issues WHERE series_id='1' AND source='test'",
+                "SELECT * FROM SeriesSearchCache WHERE search_term='search' AND source='test'",
+                *(
+                    f"DELETE FROM {table} WHERE timestamp < '2000-01-01'"
+                    for table in ("SeriesSearchCache", "Series", "Issues")
+                ),
+            ]
+            for query in queries:
+                plan = con.execute(f"EXPLAIN QUERY PLAN {query}").fetchall()
+                assert not any("SCAN" in step[3] for step in plan), plan
+
+
+def test_indexed_search_preserves_order_from_existing_series(comic_cache):
+    first = comictalker.comiccacher.Series("2", b"first")
+    second = comictalker.comiccacher.Series("1", b"second")
+    comic_cache.add_search_results("test", "earlier search", [first, second], True)
+    comic_cache.add_search_results("test", "later search", [second, first], False)
+    assert comic_cache.get_search_results("test", "later search") == [(first, True), (second, True)]
+
+
+def test_indexed_issue_lookup_preserves_order_and_source(comic_cache):
+    issues = [comictalker.comiccacher.Issue("2", "1", b"first"), comictalker.comiccacher.Issue("1", "1", b"second")]
+    comic_cache.add_issues_info("test", issues, True)
+    comic_cache.add_issues_info("other", [comictalker.comiccacher.Issue("2", "1", b"other source")], True)
+    comic_cache.add_issues_info("test", [comictalker.comiccacher.Issue("3", "2", b"other series")], True)
+    assert comic_cache.get_series_issues_info("1", "test") == [(issue, True) for issue in issues]
+
+
+def test_indexed_expiration_keeps_fresh_records(comic_cache):
+    for source in ("test", "other"):
+        for key in ("old", "fresh"):
+            comic_cache.add_search_results(source, key, [comictalker.comiccacher.Series(key, key.encode())], True)
+            comic_cache.add_issues_info(source, [comictalker.comiccacher.Issue(key, "1", key.encode())], True)
+    with sqlite3.connect(comic_cache.db_file) as con:
+        for table in ("SeriesSearchCache", "Series", "Issues"):
+            con.execute(f"UPDATE {table} SET timestamp='2000-01-01' WHERE id='old'")
+
+    assert comic_cache.get_search_results("test", "old", expire_stale=False)
+    assert comic_cache.get_issue_info("old", "test", expire_stale=False)
+    assert comic_cache.get_search_results("test", "old") == []
+    assert comic_cache.get_issue_info("old", "test") is None
+    for source in ("test", "other"):
+        assert comic_cache.get_search_results(source, "fresh")
+        assert comic_cache.get_series_info("fresh", source)
+        assert [issue.data.id for issue in comic_cache.get_series_issues_info("1", source)] == ["fresh"]
+        assert comic_cache.get_search_results(source, "old", expire_stale=False) == []
+        assert comic_cache.get_series_info("old", source, expire_stale=False) is None
+        assert comic_cache.get_issue_info("old", source, expire_stale=False) is None
