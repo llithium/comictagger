@@ -310,3 +310,30 @@ def test_delayed_save_confirmation_is_bound_to_archive(workspace, tmp_comic, qtb
     dialog.accept()
     write.assert_not_called()
     assert not workspace.actionWrite_Tags.isEnabled()
+
+
+def test_save_before_removal_follows_archive_after_tags_resort(workspace, tmp_comic, qtbot, monkeypatch):
+    import shutil
+
+    from comicapi.comicarchive import ComicArchive
+
+    first = tmp_comic.path
+    second = first.with_name("Second.cbz")
+    assert tmp_comic.remove_tags("cr")
+    shutil.copyfile(first, second)
+    files = workspace.fileSelectionList
+    files.set_sorting(files.MDFlagColNum, QtCore.Qt.SortOrder.AscendingOrder)
+    files.add_path_list([str(first), str(second)], recursive=False)
+    qtbot.waitUntil(lambda: not files.path_load_threads)
+    files.twList.selectRow(0)
+    selected = workspace.comic_archive.path
+    other = second if selected == first else first
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Saved before removal")
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", Mock(return_value=QtWidgets.QMessageBox.StandardButton.Save))
+
+    files.remove_selection()
+
+    assert files.loaded_paths == {other}
+    assert workspace.comic_archive.path == other
+    assert ComicArchive(selected).read_tags("cr").title == "Saved before removal"

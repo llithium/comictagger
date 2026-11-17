@@ -304,41 +304,16 @@ class FileSelectionList(QtWidgets.QWidget):
         return self.get_archive_by_row(self.twList.currentRow())
 
     def remove_selection(self) -> None:
-        row_list = []
-        for item in self.twList.selectedItems():
-            if item.column() == 0:
-                row_list.append(item.row())
-
-        if not row_list:
+        archives = self.get_selected_archive_list()
+        if not archives:
             return
 
-        if self.twList.currentRow() in row_list:
-            if not self.dirty_flag_verification(
-                "Remove Archive", "If you close this archive, data in the form will be lost.  Are you sure?"
-            ):
-                return
+        if self.get_current_archive() in archives and not self.dirty_flag_verification(
+            "Remove Archive", "If you close this archive, data in the form will be lost.  Are you sure?"
+        ):
+            return
 
-        row_list.sort()
-        row_list.reverse()
-
-        self.twList.currentItemChanged.disconnect(self.current_item_changed_cb)
-        self.twList.setSortingEnabled(False)
-
-        for i in row_list:
-            self.loaded_paths -= {self.get_archive_by_row(i).path}  # type: ignore[union-attr]
-            self.twList.removeRow(i)
-
-        self.twList.setSortingEnabled(True)
-        self.twList.currentItemChanged.connect(self.current_item_changed_cb)
-
-        if self.twList.rowCount() > 0:
-            # since on a removal, we select row 0, make sure callback occurs if
-            # we're already there
-            if self.twList.currentRow() == 0:
-                self.current_item_changed_cb(self.twList.currentItem(), None)
-            self.twList.selectRow(0)
-        else:
-            self.listCleared.emit()
+        self.remove_archive_list(archives)
 
     def add_path_list(self, pathlist: list[str], recursive: bool = True) -> None:
         if not pathlist:
