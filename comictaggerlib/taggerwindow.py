@@ -561,6 +561,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         return qapplogwindow
 
     def reset_app(self) -> None:
+        if self.splitter.isVisible():
+            self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
         self.archiveCoverWidget.clear()
         self.comic_archive = None
         self.dirty_flag = False

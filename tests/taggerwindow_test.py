@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -78,6 +79,17 @@ def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbo
     assert window.lblFilename.text() == "Updated issue title"
     assert not window.dirty_flag
 
+    label = window.lblTagList
+    assert label.wordWrap()
+    label.setText("Tags: Comic Rack, ComicBookLover, CoMet")
+    qtbot.waitUntil(lambda: label.height() >= 2 * label.fontMetrics().lineSpacing())
+
+    window.splitter.setSizes([400, 180])
+    list_height = window.splitter.sizes()[1]
+    assert list_height != config[0].internal__archive_list_height
     window.fileSelectionList.remove_archive_list([window.comic_archive])
     assert window.welcome.isVisible()
     assert not window.splitter.isVisible()
+    assert window.close()
+    saved = json.loads(config[0].Runtime_Options__config.settings_file.read_text(encoding="utf-8"))
+    assert saved["internal"]["archive_list_height"] == list_height
