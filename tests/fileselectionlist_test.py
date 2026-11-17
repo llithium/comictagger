@@ -9,7 +9,7 @@ import pytest
 QtCore = pytest.importorskip("PyQt6.QtCore")
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
-from comictaggerlib.fileselectionlist import FileSelectionList
+from comictaggerlib.fileselectionlist import FileSelectionList, PreparedPathItem
 from comictaggerlib.resulttypes import Action, OnlineMatchResults, Result, Status
 from testing.filenames import cbz_path
 
@@ -180,6 +180,18 @@ def test_loading_paths_adds_archives_after_background_probe(tmp_path, config, qt
     qtbot.waitUntil(lambda: not file_list.path_load_threads)
     assert file_list.twList.rowCount() == 1
     assert file_list.get_current_archive().path == source_path
+
+
+def test_tags_column_fits_all_detected_formats(tmp_comic, config, qtbot) -> None:
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    file_list.show()
+    formats = ("cr", "cbl", "comet")
+    file_list._finish_path_load([PreparedPathItem(tmp_comic, "ZIP", formats, True)])
+    table = file_list.twList
+    column = file_list.MDFlagColNum
+    assert table.item(0, column).text() == ", ".join(formats)
+    assert table.columnWidth(column) >= table.sizeHintForColumn(column)
 
 
 def test_moved_archive_refreshes_file_list_paths(tmp_path, config) -> None:

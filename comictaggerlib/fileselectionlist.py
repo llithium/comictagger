@@ -116,6 +116,7 @@ class FileSelectionList(QtWidgets.QWidget):
         header = self.twList.horizontalHeader()
         header.setMinimumSectionSize(54)
         header.setSectionResizeMode(self.fileColNum, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(self.MDFlagColNum, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         header.setDefaultAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.twList.setColumnWidth(self.folderColNum, 260)
         self.twList.currentItemChanged.connect(self.current_item_changed_cb)
@@ -364,6 +365,12 @@ class FileSelectionList(QtWidgets.QWidget):
         thread.start()
 
     def _finish_path_load(self, prepared_items: list[PreparedPathItem]) -> None:
+        if prepared_items and self.twList.rowCount() == 0 and self.dirty_flag:
+            if not self.dirty_flag_verification(
+                "Open Archive", "Discard your blank metadata draft and open the archive?"
+            ):
+                return
+
         first_added = None
         rar_added_ro = False
         self.twList.setSortingEnabled(False)
@@ -389,7 +396,6 @@ class FileSelectionList(QtWidgets.QWidget):
 
         # Adjust column size
         self.twList.resizeColumnsToContents()
-        self.twList.setColumnWidth(FileSelectionList.MDFlagColNum, 35)
         self.twList.resizeColumnToContents(FileSelectionList.readonlyColNum)
         self.twList.setColumnWidth(FileSelectionList.typeColNum, 45)
         self.twList.resizeColumnToContents(FileSelectionList.matchColNum)

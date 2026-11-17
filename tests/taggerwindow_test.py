@@ -63,7 +63,20 @@ def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbo
     assert window.tabWidget.isVisible()
     assert window.leSeries.text() == ""
 
-    window.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.keyClicks(window.leTitle, "Draft title")
+    choices = QtWidgets.QMessageBox.StandardButton
+    question = Mock(side_effect=[choices.Cancel, choices.Discard])
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", question)
+    archive_url = QtCore.QUrl.fromLocalFile(str(tmp_comic.path))
+    window.open_file_event(archive_url)
+    qtbot.waitUntil(lambda: not window.fileSelectionList.path_load_threads)
+    assert question.call_args.args[3] == choices.Cancel | choices.Discard
+    assert window.comic_archive is None
+    assert window.fileSelectionList.twList.rowCount() == 0
+    assert window.dirty_flag
+    assert window.leTitle.text() == "Draft title"
+
+    window.open_file_event(archive_url)
     qtbot.waitUntil(lambda: window.comic_archive is not None)
     assert window.leSeries.text()
     for index in range(window.tabWidget.count()):

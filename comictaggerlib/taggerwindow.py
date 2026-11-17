@@ -2145,15 +2145,14 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def dirty_flag_verification(self, title: str, desc: str) -> bool:
         if not self.dirty_flag:
             return True
+        buttons = QtWidgets.QMessageBox.StandardButton.Cancel | QtWidgets.QMessageBox.StandardButton.Discard
+        if self.comic_archive is not None:
+            buttons |= QtWidgets.QMessageBox.StandardButton.Save
         reply = QtWidgets.QMessageBox.question(
             self,
             title,
             desc,
-            (
-                QtWidgets.QMessageBox.StandardButton.Save
-                | QtWidgets.QMessageBox.StandardButton.Cancel
-                | QtWidgets.QMessageBox.StandardButton.Discard
-            ),
+            buttons,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
 
