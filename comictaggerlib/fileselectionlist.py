@@ -111,7 +111,13 @@ class FileSelectionList(QtWidgets.QWidget):
 
         self.config = config
         self.twList: QtWidgets.QTableWidget
-        self.twList.horizontalHeader().setMinimumSectionSize(50)
+        self.twList.verticalHeader().hide()
+        self.twList.setShowGrid(False)
+        header = self.twList.horizontalHeader()
+        header.setMinimumSectionSize(54)
+        header.setSectionResizeMode(self.fileColNum, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setDefaultAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.twList.setColumnWidth(self.folderColNum, 260)
         self.twList.currentItemChanged.connect(self.current_item_changed_cb)
 
         self.currentItem = None
@@ -384,13 +390,11 @@ class FileSelectionList(QtWidgets.QWidget):
         # Adjust column size
         self.twList.resizeColumnsToContents()
         self.twList.setColumnWidth(FileSelectionList.MDFlagColNum, 35)
-        self.twList.setColumnWidth(FileSelectionList.readonlyColNum, 35)
+        self.twList.resizeColumnToContents(FileSelectionList.readonlyColNum)
         self.twList.setColumnWidth(FileSelectionList.typeColNum, 45)
         self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
-        if self.twList.columnWidth(FileSelectionList.fileColNum) > 250:
-            self.twList.setColumnWidth(FileSelectionList.fileColNum, 250)
-        if self.twList.columnWidth(FileSelectionList.folderColNum) > 200:
-            self.twList.setColumnWidth(FileSelectionList.folderColNum, 200)
+        if self.twList.columnWidth(FileSelectionList.folderColNum) > 250:
+            self.twList.setColumnWidth(FileSelectionList.folderColNum, 250)
 
     def _path_load_error(self, error: Exception) -> None:
         OptionalMessageDialog.critical(self, "File/Folder Open", f"Failed to load comic archives: {error}")

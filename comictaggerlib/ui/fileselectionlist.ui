@@ -42,7 +42,7 @@
      </attribute>
      <column>
       <property name="text">
-       <string>File</string>
+       <string>Archive</string>
       </property>
       <property name="toolTip">
        <string>File Name</string>
@@ -66,7 +66,7 @@
      </column>
      <column>
       <property name="text">
-       <string>R/O</string>
+       <string>Read-only</string>
       </property>
       <property name="toolTip">
        <string>Read-Only</string>

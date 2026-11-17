@@ -205,23 +205,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.socket_server = socket_server
         self.socket_server.newConnection.connect(self.on_incoming_socket_connection)
 
-        # we can't specify relative font sizes in the UI designer, so
-        # walk through all the labels in the main form, and make them
-        # a smidge smaller TODO: there has to be a better way to do this
-        try:
-            for child in self.scrollAreaWidgetContents.children():
-                if isinstance(child, QtWidgets.QLabel):
-                    f = child.font()
-                    if f.pointSize() > 10:
-                        f.setPointSize(f.pointSize() - 2)
-                    f.setItalic(True)
-                    child.setFont(f)
-            self.scrollAreaWidgetContents.adjustSize()
-        except Exception:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            trace_back = "".join(traceback.format_tb(exc_traceback))
-            logger.exception("Failed to adjust sizes")
-            OptionalMessageDialog.critical(self, "Failed to adjust sizes", "", trace_back)
+        self.configure_workspace()
 
         try:
             self.qicon = QtGui.QIcon(str(graphics_path / "app.png"))
@@ -317,7 +301,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.page_list_editor.firstFrontCoverChanged.connect(self.front_cover_changed)
         self.page_list_editor.listOrderChanged.connect(self.page_list_order_changed)
         self.page_list_editor.archiveChanged.connect(self.update_info_box)
-        self.tabWidget.currentChanged.connect(self.tab_changed)
         self.leGtin.textChanged.connect(self.gtin_changed)
 
         self.page_list_editor.set_blur(self.config[0].General__blur)
@@ -329,8 +312,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.config[0].General__blur = self.page_list_editor.blur
 
         self.page_list_editor.cbxBlur.clicked.connect(_sync_blur)
-
-        self.splitter.splitterMoved.connect(self.splitter_moved_event)
 
         self.fileSelectionList.add_app_action(self.actionAutoIdentify)
         self.fileSelectionList.add_app_action(self.actionAutoTag)
@@ -364,11 +345,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Failed to load comics", "", trace_back)
 
         self.set_app_position()
-        if self.config[0].internal__form_width != -1:
-            self.splitter.setSizes([self.config[0].internal__form_width, self.config[0].internal__list_width])
+        list_height = self.config[0].internal__archive_list_height
+        self.splitter.setSizes([max(1, self.splitter.height() - list_height), list_height])
         self.raise_()
         QtCore.QCoreApplication.processEvents()
-        self.resizeEvent(None)
 
         if self.config[0].Dialog_Flags__show_disclaimer:
 
@@ -438,6 +418,104 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self, "Failed to check for new version", "Failed to check for new version", trace_back
             )
 
+    def configure_workspace(self) -> None:
+        self.coverImageContainer.setFixedWidth(216)
+        self.coverImageContainer.setMinimumHeight(116)
+        self.coverImageContainer.setMaximumHeight(288)
+        self.frameInfoBox.setFixedWidth(216)
+        self.verticalLayout.setStretch(0, 1)
+        self.verticalLayout.setSpacing(8)
+        self.tagSupportHint = QtWidgets.QLabel("Shaded fields are unavailable for the selected write tags.")
+        self.tagSupportHint.setObjectName("tagSupportHint")
+        self.tagSupportHint.setFixedWidth(216)
+        self.tagSupportHint.setWordWrap(True)
+        self.verticalLayout.insertWidget(3, self.tagSupportHint)
+        self.horizontalLayout_2.setContentsMargins(6, 0, 6, 4)
+        self.horizontalLayout_2.setSpacing(18)
+        self.gridLayout_5.setContentsMargins(5, 2, 5, 4)
+        self.gridLayout.setContentsMargins(18, 12, 18, 8)
+        self.gridLayout_6.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.widgetListHolder.setMinimumHeight(62)
+        self.widgetListHolder.layout().setContentsMargins(0, 0, 0, 0)
+        self.fileSelectionList.layout().setContentsMargins(0, 0, 0, 0)
+        self.tabWidget.tabBar().setDrawBase(False)
+        self.tabWidget.tabBar().setExpanding(False)
+        for button, text, name in (
+            (self.archiveCoverWidget.btnLeft, "‹", "Previous page"),
+            (self.archiveCoverWidget.btnRight, "›", "Next page"),
+        ):
+            button.setFixedWidth(30)
+            button.setIcon(QtGui.QIcon())
+            button.setText(text)
+            button.setAccessibleName(name)
+            button.setToolTip(name)
+        self.toolBar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.toolBar.widgetForAction(self.actionWrite_Tags).setObjectName("saveTags")
+        self.toolBar.insertSeparator(self.actionSearchOnline)
+        self.toolBar.insertSeparator(self.actionPageBrowser)
+
+        self.welcome = QtWidgets.QWidget(self.centralWidget)
+        self.welcome.setObjectName("welcome")
+        welcome_layout = QtWidgets.QVBoxLayout(self.welcome)
+        welcome_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.setSpacing(12)
+        mark = QtWidgets.QLabel()
+        mark.setPixmap(QtGui.QIcon(":/graphics/app.png").pixmap(72, 72))
+        title = QtWidgets.QLabel("Open a comic archive")
+        title.setObjectName("welcomeTitle")
+        description = QtWidgets.QLabel("Drop comic files or a folder here to view and edit their metadata.")
+        for widget in (mark, title, description):
+            welcome_layout.addWidget(widget, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        for text, action in (("Open archive", self.actionLoad), ("Open folder", self.actionLoadFolder)):
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(action.trigger)
+            buttons.addWidget(button)
+            if action == self.actionLoad:
+                button.setObjectName("openArchive")
+        welcome_layout.addLayout(buttons)
+        blank = QtWidgets.QPushButton("Edit blank metadata")
+        blank.setObjectName("blankEditor")
+        blank.clicked.connect(self.show_editor)
+        welcome_layout.addWidget(blank, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.gridLayout.addWidget(self.welcome, 0, 0)
+        self.apply_workspace_style()
+
+    def show_editor(self) -> None:
+        self.toolBar.show()
+        self.welcome.hide()
+        self.splitter.show()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.ApplicationPaletteChange and hasattr(self, "welcome"):
+            self.apply_workspace_style()
+
+    def apply_workspace_style(self) -> None:
+        dark = self.palette().window().color().lightness() < 128
+        colors = {
+            "canvas": "#1e2326" if dark else "#f2f4f3",
+            "surface": "#282e30" if dark else "#ffffff",
+            "ink": "#f0f4f1" if dark else "#1d302d",
+            "muted": "#bdcbc6" if dark else "#4b615b",
+            "edge": "#58645f" if dark else "#c9d3cf",
+            "accent": "#a6dfcb" if dark else "#175b49",
+            "onAccent": "#112b22" if dark else "#ffffff",
+            "selection": "#345549" if dark else "#d5e9df",
+            "wash": "#343e3b" if dark else "#e9efec",
+        }
+        with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
+            style = sheet.read()
+        style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
+        for role, color in colors.items():
+            style = style.replace("@" + role, color)
+        self.centralWidget.setStyleSheet(style)
+        self.toolBar.setStyleSheet(style)
+
     def enabled_tags(self) -> Sequence[str]:
         return [tag.id for tag in tags.values() if tag.enabled]
 
@@ -494,6 +572,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_menus()
         self.update_info_box()
 
+        self.splitter.hide()
+        self.welcome.show()
+        self.toolBar.hide()
         self.droppedFile = None
         self.page_loader = None
 
@@ -813,7 +894,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         ca = self.comic_archive
 
         if ca is None:
-            self.lblFilename.setText("")
+            self.lblFilename.setText("No archive selected")
             self.lblArchiveType.setText("")
             self.lblTagList.setText("")
             self.lblPageCount.setText("")
@@ -823,20 +904,18 @@ class TaggerWindow(QtWidgets.QMainWindow):
         filename = os.path.splitext(filename)[0]
         filename = FileNameParser().fix_spaces(filename, False)
 
-        self.lblFilename.setText(filename)
+        self.show_editor()
+        self.lblFilename.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.lblFilename.setText(self.metadata.title or filename)
+        self.lblFilename.setToolTip(filename)
 
         self.lblArchiveType.setText(ca.archiver.name() + " archive")
 
-        page_count = f" ({ca.get_number_of_pages()} pages)"
+        page_count = f"·  {ca.get_number_of_pages()} pages"
         self.lblPageCount.setText(page_count)
 
-        supported_md = ca.get_supported_tags()
-        tag_info = ""
-        for md in supported_md:
-            if ca.has_tags(md):
-                tag_info += "• " + tags[md].name() + "\n"
-
-        self.lblTagList.setText(tag_info)
+        tag_list = ", ".join(tags[tag].name() for tag in ca.get_supported_tags() if ca.has_tags(tag))
+        self.lblTagList.setText(f"Tags: {tag_list}" if tag_list else "")
 
     def set_dirty_flag(self) -> None:
         if not self.dirty_flag:
@@ -1394,6 +1473,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if widget is not None and not isinstance(widget, (int)):
                 enable_widget(widget, md_field in enabled_widgets)
 
+        self.tagSupportHint.setVisible(
+            any(not field.isEnabled() for field in self.scrollAreaWidgetContents.findChildren(QtWidgets.QLineEdit))
+        )
         self.update_credit_colors()
         self.page_list_editor.select_write_tags(self.config[0].Runtime_Options__tags_write)
         self.toggle_enable_embedding_hashes()
@@ -2089,8 +2171,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.config[0].internal__window_height = appsize.height()
             self.config[0].internal__window_x = self.x()
             self.config[0].internal__window_y = self.y()
-            self.config[0].internal__form_width = self.splitter.sizes()[0]
-            self.config[0].internal__list_width = self.splitter.sizes()[1]
+            if self.splitter.isVisible():
+                self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
             (
                 self.config[0].internal__sort_column,
                 self.config[0].internal__sort_direction,
@@ -2217,21 +2299,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def file_list_cleared(self) -> None:
         self.reset_app()
-
-    def splitter_moved_event(self, w1: int, w2: int) -> None:
-        scrollbar_w = 0
-        if self.scrollArea.verticalScrollBar().isVisible():
-            scrollbar_w = self.scrollArea.verticalScrollBar().width()
-
-        new_w = self.scrollArea.width() - scrollbar_w - 5
-        self.scrollAreaWidgetContents.resize(new_w, self.scrollAreaWidgetContents.height())
-
-    def resizeEvent(self, ev: QtGui.QResizeEvent | None) -> None:
-        self.splitter_moved_event(0, 0)
-
-    def tab_changed(self, idx: int) -> None:
-        if idx == 0:
-            self.splitter_moved_event(0, 0)
 
     def gtin_changed(self) -> None:
         # GTIN changed, so we check if it's valid

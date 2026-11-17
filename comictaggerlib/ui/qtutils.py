@@ -158,7 +158,7 @@ try:
             return
         active_color = active_palette.color(QtGui.QPalette.ColorRole.Base)
 
-        inactive_color = QtGui.QColor(255, 170, 150)
+        inactive_color = active_palette.color(QtGui.QPalette.ColorRole.Window)
         inactive_brush = QtGui.QBrush(inactive_color)
         active_brush = QtGui.QBrush(active_color)
 
