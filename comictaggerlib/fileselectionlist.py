@@ -381,12 +381,12 @@ class FileSelectionList(QtWidgets.QWidget):
                     if prepared.archive_type == "RAR" and not prepared.writable:
                         rar_added_ro = True
                     if first_added is None and row != -1:
-                        first_added = row
+                        first_added = self.twList.item(row, self.fileColNum)
         finally:
             self.twList.setSortingEnabled(True)
 
         if first_added is not None:
-            self.twList.selectRow(first_added)
+            self.twList.selectRow(first_added.row())
         else:
             OptionalMessageDialog.information(self, "File/Folder Open", "No readable comic archives were found.")
             return
@@ -620,8 +620,7 @@ class FileSelectionList(QtWidgets.QWidget):
                     QtCore.QTimer.singleShot(1, self.revert_selection)
                     return
 
-            fi = self.twList.item(new_idx, FileSelectionList.dataColNum).data(QtCore.Qt.ItemDataRole.UserRole)
-            self.selectionChanged.emit(QtCore.QVariant(fi))
+            self.selectionChanged.emit(QtCore.QVariant(ca))
 
     def revert_selection(self) -> None:
         self.twList.selectRow(self.twList.currentRow())

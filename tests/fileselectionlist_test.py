@@ -296,3 +296,15 @@ def test_selecting_moved_archive_removes_it_without_reentrant_selection(tmp_path
     assert file_list.get_current_archive().path == second_path
     assert selected_archives[-1].path == second_path
     assert file_list.max_callback_depth == 1, file_list.callback_events
+
+
+def test_opening_files_selects_first_requested_archive_after_sorting(tmp_path, config, qtbot):
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    file_list.set_sorting(file_list.fileColNum, QtCore.Qt.SortOrder.AscendingOrder)
+    paths = [tmp_path / name for name in ("z.cbz", "a.cbz")]
+    for path in paths:
+        shutil.copy(cbz_path, path)
+    file_list.add_path_list([str(path) for path in paths], recursive=False)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    assert file_list.get_current_archive().path == paths[0]

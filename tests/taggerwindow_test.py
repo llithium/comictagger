@@ -191,3 +191,122 @@ def test_workspace_field_and_selection_contrast(workspace, window_color):
     for row in (0, 1):
         assert contrast(row_background(row), row_background(2)) >= 3
         assert contrast(row_background(row), table.palette().highlightedText().color()) >= 4.5
+
+
+@pytest.mark.parametrize("write_succeeds", [True, False])
+def test_save_before_switching_archives(workspace, tmp_comic, qtbot, monkeypatch, write_succeeds):
+    import shutil
+
+    from comicapi.comicarchive import ComicArchive
+    from comictaggerlib import taggerwindow
+
+    first = tmp_comic.path
+    second = first.with_name("Another issue.cbz")
+    shutil.copyfile(first, second)
+    original_title = ComicArchive(second).read_tags("cr").title
+    workspace.config[0].General__prompt_on_save = True
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(first)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Edited first archive")
+    choices = QtWidgets.QMessageBox.StandardButton
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", Mock(return_value=choices.Save))
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "warning", Mock())
+    confirmation = Mock()
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "msg", confirmation)
+    if not write_succeeds:
+        monkeypatch.setattr(workspace.comic_archive, "write_tags", Mock(return_value=False))
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(second)))
+    qtbot.waitUntil(lambda: not workspace.fileSelectionList.path_load_threads)
+    confirmation.assert_not_called()
+    assert ComicArchive(second).read_tags("cr").title == original_title
+    assert workspace.comic_archive.path == (second if write_succeeds else first)
+    assert workspace.fileSelectionList.get_current_archive().path == workspace.comic_archive.path
+    if write_succeeds:
+        assert ComicArchive(first).read_tags("cr").title == "Edited first archive"
+        assert not workspace.dirty_flag
+    else:
+        assert workspace.dirty_flag
+        assert workspace.leTitle.text() == "Edited first archive"
+        assert ComicArchive(first).read_tags("cr").title == original_title
+        monkeypatch.setattr(QtWidgets.QMessageBox, "question", Mock(return_value=choices.Discard))
+
+
+def test_editor_preferences_survive_metadata_refresh(workspace, tmp_comic, qtbot):
+    from PyQt6 import QtGui
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.toolBar.hide()
+    workspace.update_info_box()
+    assert not workspace.toolBar.isVisible()
+
+    font = workspace.font()
+    font.setPointSize(24)
+    workspace.setFont(font)
+    assert workspace.label_2.fontMetrics().height() >= workspace.leSeries.fontMetrics().height() * 0.8
+
+    palette = workspace.palette()
+    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#202426"))
+    palette.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor("#15181a"))
+    workspace.setPalette(palette)
+    assert workspace.twCredits.rowCount() > 0
+    for column in range(workspace.twCredits.columnCount()):
+        brush = workspace.twCredits.item(0, column).background()
+        assert brush.style() == QtCore.Qt.BrushStyle.NoBrush or brush.color() == palette.window().color()
+
+
+def test_web_link_removal_and_localized_rating_round_trip(workspace, tmp_comic, qtbot):
+    from comicapi.comicarchive import ComicArchive
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    assert workspace.leWebLink.count() == 1
+    workspace.leWebLink.setCurrentRow(0)
+    workspace.actionRemoveWebLink.trigger()
+    assert workspace.dirty_flag
+    workspace.dsbCriticalRating.setLocale(QtCore.QLocale("de_DE"))
+    workspace.dsbCriticalRating.setValue(2.5)
+    workspace.actionWrite_Tags.trigger()
+    saved = ComicArchive(tmp_comic.path).read_tags("cr")
+    assert not saved.web_links
+    assert saved.critical_rating == 2.5
+
+
+def test_archive_pane_restores_height_after_welcome(plugin_config, qtbot, monkeypatch):
+    from PyQt6 import QtNetwork
+
+    from comictaggerlib.taggerwindow import TaggerWindow
+
+    config, talkers = plugin_config
+    config[0].internal__window_height = 960
+    config[0].internal__window_width = 1200
+    config[0].internal__archive_list_height = 245
+    config[0].Dialog_Flags__show_disclaimer = False
+    config[0].Dialog_Flags__notify_plugin_changes = False
+    monkeypatch.setattr(TaggerWindow, "setup_logger", lambda window: QtWidgets.QDialog(window))
+    window = TaggerWindow(config, talkers, QtNetwork.QLocalServer())
+    qtbot.addWidget(window)
+    window.show()
+    window._post_show([])
+    window.show_editor()
+    QtWidgets.QApplication.processEvents()
+    assert abs(window.splitter.sizes()[1] - 245) <= 1
+
+
+def test_delayed_save_confirmation_is_bound_to_archive(workspace, tmp_comic, qtbot, monkeypatch):
+    from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.config[0].General__prompt_on_save = True
+    workspace.actionWrite_Tags.trigger()
+    dialog = workspace.findChild(OptionalMessageDialog)
+    assert dialog is not None
+    write = Mock()
+    monkeypatch.setattr(workspace, "write_tags", write)
+    workspace.fileSelectionList.remove_archive_list([workspace.comic_archive])
+    dialog.accept()
+    write.assert_not_called()
+    assert not workspace.actionWrite_Tags.isEnabled()

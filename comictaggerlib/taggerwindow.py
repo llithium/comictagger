@@ -35,7 +35,6 @@ import settngs
 from PyQt6 import QtCore, QtGui, QtNetwork, QtWidgets, uic
 
 import comicapi.merge
-import comictaggerlib.ui
 from comicapi import utils
 from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
@@ -179,7 +178,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
             "identifier": None,
             "last_mark": None,
         }
-        comictaggerlib.ui.qtutils.active_palette = self.leSeries.palette()
         self.config = config
         self.talkers = talkers
         self.log_window = self.setup_logger()
@@ -494,7 +492,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
         super().changeEvent(event)
         if event.type() == QtCore.QEvent.Type.PaletteChange and hasattr(self, "welcome"):
             self.apply_workspace_style()
-            qtutils.active_palette = self.palette()
+            if self.twCredits.rowCount():
+                self.update_credit_colors()
+        elif event.type() == QtCore.QEvent.Type.FontChange and hasattr(self, "welcome"):
+            self.apply_workspace_style()
 
     def apply_workspace_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
@@ -511,6 +512,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         }
         with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
             style = sheet.read()
+        font_size = self.fontInfo().pixelSize()
+        for name, scale in (("bodyText", 1.0), ("smallText", 0.92), ("headingText", 1.23), ("welcomeText", 2.15)):
+            style = style.replace("@" + name, f"{round(font_size * scale)}px")
         style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
         for role, color in colors.items():
             style = style.replace("@" + role, color)
@@ -672,8 +676,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.leWebLink.editItem(self.leWebLink.item(self.leWebLink.count() - 1))
 
     def remove_weblink_item(self) -> None:
-        item = self.leWebLink.takeItem(self.leWebLink.currentRow())
-        del item
+        if self.leWebLink.takeItem(self.leWebLink.currentRow()) is not None:
+            self.set_dirty_flag()
 
     def repackage_archive(self) -> None:
         ca_list = self.fileSelectionList.get_selected_archive_list()
@@ -856,6 +860,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def update_menus(self) -> None:
         enabled = self.comic_archive is not None
         writeable = self.comic_archive is not None and self.comic_archive.is_writable()
+        self.actionWrite_Tags.setEnabled(enabled)
         self.actionApplyCBLTransform.setEnabled(enabled)
         self.actionAutoIdentify.setEnabled(enabled)
         self.actionAutoTag.setEnabled(enabled)
@@ -874,30 +879,16 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.view_tag_actions[tag_id].setEnabled(tags[tag_id].enabled and self.comic_archive.has_tags(tag_id))
                 self.remove_tag_actions[tag_id].setEnabled(tags[tag_id].enabled and self.comic_archive.has_tags(tag_id))
 
-            if writeable:
-                self.actionWrite_Tags
-                self.actionWrite_Tags.triggered.disconnect()
-                self.actionWrite_Tags.triggered.connect(self.prompt_write_tags)
-                self.actionWrite_Tags.setToolTip("")
-                self.actionWrite_Tags.setStatusTip("")
-            else:
-                self.actionWrite_Tags.triggered.disconnect()
-                self.actionWrite_Tags.triggered.connect(
-                    functools.partial(
-                        self._toast,
-                        "Unable to write Tags",
-                        f"Archive is not writeable\n{self.comic_archive.path}",
-                        5000,
-                    )
-                )
-                self.actionWrite_Tags.setToolTip("Archive is not writeable")
-                self.actionWrite_Tags.setStatusTip("Archive is not writeable")
+        save_hint = "Archive is not writeable" if enabled and not writeable else ""
+        self.actionWrite_Tags.setToolTip(save_hint)
+        self.actionWrite_Tags.setStatusTip(save_hint)
 
     def update_info_box(self) -> None:
         ca = self.comic_archive
 
         if ca is None:
             self.lblFilename.setText("No archive selected")
+            self.lblFilename.setToolTip("")
             self.lblArchiveType.setText("")
             self.lblTagList.setText("")
             self.lblPageCount.setText("")
@@ -907,7 +898,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         filename = os.path.splitext(filename)[0]
         filename = FileNameParser().fix_spaces(filename, False)
 
-        self.show_editor()
+        if not self.welcome.isHidden():
+            self.show_editor()
         self.lblFilename.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.lblFilename.setText(self.metadata.title or filename)
         self.lblFilename.setToolTip(filename)
@@ -1147,9 +1139,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         md.notes = utils.xlate(self.teNotes.toPlainText())
         md.maturity_rating = utils.xlate(self.cbMaturityRating.currentText())
 
-        md.critical_rating = utils.xlate_float(self.dsbCriticalRating.cleanText())
-        if md.critical_rating == 0.0:
-            md.critical_rating = None
+        md.critical_rating = self.dsbCriticalRating.value() or None
 
         md.story_arcs = utils.split(self.leStoryArc.text(), ",")
         md.scan_info = utils.xlate(self.leScanInfo.text())
@@ -1373,7 +1363,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             return
 
         if not self.config[0].General__prompt_on_save:
-            return self.write_tags()
+            self.write_tags()
+            return
 
         qmsg = OptionalMessageDialog.msg(
             parent=self,
@@ -1381,13 +1372,19 @@ class TaggerWindow(QtWidgets.QMainWindow):
             msg=f"Are you sure you wish to save {', '.join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])} tags to this archive?",
             icon=OptionalMessageDialog.Icon.Question,
         )
-        qmsg.accepted.connect(self.write_tags)
+        archive = self.comic_archive
+
+        def save_confirmed_archive() -> None:
+            if self.comic_archive is archive:
+                self.write_tags()
+
+        qmsg.accepted.connect(save_confirmed_archive)
         qmsg.check_status.connect(self._update_prompt_on_save)
 
     def _update_prompt_on_save(self, check: bool) -> None:
         self.config[0].General__prompt_on_save = not check
 
-    def write_tags(self) -> None:
+    def write_tags(self) -> bool:
         QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
         try:
             self.form_to_metadata()
@@ -1396,6 +1393,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.comic_archive, self.metadata, self.config[0].Runtime_Options__tags_write
             )
             self.comic_archive.load_cache(set(tags))
+        except Exception as write_error:
+            logger.exception("Failed to save metadata")
+            OptionalMessageDialog.warning(self, "Save failed", str(write_error))
+            return False
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
@@ -1405,24 +1406,23 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 "Save failed",
                 f"The tag save operation seemed to fail for: {tags[failed_tag].name()}",
             )
-        else:
-            self.clear_dirty_flag()
-            self.update_info_box()
-            self.update_menus()
+            return False
 
-            self.metadata, _, error = read_configured_tags(
-                self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
+        self.metadata, _, error = read_configured_tags(
+            self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
+        )
+        if error is not None:
+            logger.error("Failed to load metadata for %s: %s", self.comic_archive.path, error)
+            OptionalMessageDialog.warning(
+                self,
+                "Read Failed!",
+                f"One or more of the selected read tags failed to load for {self.comic_archive.path}, check log for details",
             )
-            if error is not None:
-                logger.error("Failed to load metadata for %s: %s", self.comic_archive.path, error)
-                OptionalMessageDialog.warning(
-                    self,
-                    "Read Failed!",
-                    f"One or more of the selected read tags failed to load for {self.comic_archive.path}, check log for details",
-                )
 
-        self.fileSelectionList.update_current_row()
+        row, _ = self.fileSelectionList.get_current_list_row(str(self.comic_archive.path))
+        self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
+        return True
 
     def select_read_tags(self, tag_ids: list[str]) -> None:
         """Should only be called from the combobox signal"""
@@ -1464,7 +1464,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 widget = self.twCredits.item(r, credit[1])
                 if credit[0] == "credits.role":
                     widget_enabled = widget_enabled and supports_role
-                enable_widget(widget, widget_enabled)
+                widget.setBackground(QtGui.QBrush() if widget_enabled else self.palette().window())
 
     def update_tag_tweaks(self) -> None:
         # depending on the current data tag, certain fields are disabled
@@ -2149,7 +2149,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if not self.dirty_flag:
             return True
         buttons = QtWidgets.QMessageBox.StandardButton.Cancel | QtWidgets.QMessageBox.StandardButton.Discard
-        if self.comic_archive is not None:
+        if self.comic_archive is not None and self.comic_archive.is_writable():
             buttons |= QtWidgets.QMessageBox.StandardButton.Save
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -2162,8 +2162,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if reply == QtWidgets.QMessageBox.StandardButton.Discard:
             return True
         if reply == QtWidgets.QMessageBox.StandardButton.Save:
-            self.prompt_write_tags()
-            return True
+            return self.write_tags()
         return False
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
