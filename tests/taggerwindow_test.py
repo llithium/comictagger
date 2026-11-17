@@ -41,10 +41,10 @@ def test_copy_tags_keeps_cancel_available_during_the_last_archive(tmp_path, conf
     assert not progress.isVisible()
 
 
-def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbot, monkeypatch):
+@pytest.fixture
+def workspace(plugin_config, qtbot, monkeypatch):
     from PyQt6 import QtNetwork
 
-    from comicapi.comicarchive import ComicArchive
     from comictaggerlib.taggerwindow import TaggerWindow
 
     monkeypatch.setattr(TaggerWindow, "setup_logger", lambda window: QtWidgets.QDialog(window))
@@ -56,6 +56,31 @@ def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbo
     qtbot.addWidget(window)
     window.show()
     window._post_show([])
+    return window
+
+
+def test_workspace_follows_palette_changes(workspace):
+    from PyQt6 import QtGui
+
+    role = QtGui.QPalette.ColorRole.Window
+    palette = workspace.palette()
+    palette.setColor(role, QtGui.QColor("black"))
+    workspace.setPalette(palette)
+    assert "#1e2326" in workspace.centralWidget.styleSheet()
+    assert "#1e2326" in workspace.toolBar.styleSheet()
+
+    palette.setColor(role, QtGui.QColor("white"))
+    workspace.setPalette(palette)
+    assert "#f2f4f3" in workspace.centralWidget.styleSheet()
+    assert "#f2f4f3" in workspace.toolBar.styleSheet()
+
+
+@pytest.mark.parametrize("draft_field", ["title", "rating"])
+def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, monkeypatch, draft_field):
+    from comicapi.comicarchive import ComicArchive
+
+    window = workspace
+    config = window.config
     assert window.welcome.isVisible()
 
     blank = window.welcome.findChild(QtWidgets.QPushButton, "blankEditor")
@@ -63,7 +88,13 @@ def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbo
     assert window.tabWidget.isVisible()
     assert window.leSeries.text() == ""
 
-    qtbot.keyClicks(window.leTitle, "Draft title")
+    if draft_field == "rating":
+        window.tabWidget.setCurrentWidget(window.tab_3)
+        qtbot.keyClick(window.dsbCriticalRating, QtCore.Qt.Key.Key_Up)
+        rating = window.dsbCriticalRating.value()
+        assert rating > 0
+    else:
+        qtbot.keyClicks(window.leTitle, "Draft title")
     choices = QtWidgets.QMessageBox.StandardButton
     question = Mock(side_effect=[choices.Cancel, choices.Discard])
     monkeypatch.setattr(QtWidgets.QMessageBox, "question", question)
@@ -74,7 +105,10 @@ def test_workspace_opens_edits_and_clears_archive(plugin_config, tmp_comic, qtbo
     assert window.comic_archive is None
     assert window.fileSelectionList.twList.rowCount() == 0
     assert window.dirty_flag
-    assert window.leTitle.text() == "Draft title"
+    if draft_field == "rating":
+        assert window.dsbCriticalRating.value() == rating
+    else:
+        assert window.leTitle.text() == "Draft title"
 
     window.open_file_event(archive_url)
     qtbot.waitUntil(lambda: window.comic_archive is not None)

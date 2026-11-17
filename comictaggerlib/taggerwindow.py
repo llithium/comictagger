@@ -492,8 +492,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
         super().changeEvent(event)
-        if event.type() == QtCore.QEvent.Type.ApplicationPaletteChange and hasattr(self, "welcome"):
+        if event.type() == QtCore.QEvent.Type.PaletteChange and hasattr(self, "welcome"):
             self.apply_workspace_style()
+            qtutils.active_palette = self.palette()
 
     def apply_workspace_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
@@ -942,6 +943,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             widget.textChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QComboBox):
             widget.currentIndexChanged.connect(self.set_dirty_flag)
+        if isinstance(widget, QtWidgets.QDoubleSpinBox):
+            widget.valueChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QCheckBox):
             widget.stateChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QListWidget):
