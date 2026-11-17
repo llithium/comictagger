@@ -506,7 +506,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             "edge": "#58645f" if dark else "#c9d3cf",
             "accent": "#a6dfcb" if dark else "#175b49",
             "onAccent": "#112b22" if dark else "#ffffff",
-            "selection": "#345549" if dark else "#d5e9df",
+            "fieldBorder": "#899a92" if dark else "#7a8b83",
             "wash": "#343e3b" if dark else "#e9efec",
         }
         with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:

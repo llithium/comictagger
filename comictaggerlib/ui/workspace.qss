@@ -24,13 +24,13 @@ QWidget#scrollAreaWidgetContents QLabel#classificationHeading, QWidget#scrollAre
     font-size: 16px; font-weight: bold; color: @ink; padding-top: 6px;
 }
 QWidget#scrollAreaWidgetContents QLineEdit, QWidget#scrollAreaWidgetContents QComboBox {
-    background: @surface; color: @ink; border: 1px solid @edge; border-radius: 4px; padding: 3px 6px; min-height: 17px;
+    background: @surface; color: @ink; border: 1px solid @fieldBorder; border-radius: 4px; padding: 3px 6px; min-height: 17px;
 }
 QWidget#scrollAreaWidgetContents QComboBox { padding-right: 20px; }
 QWidget#scrollAreaWidgetContents QLineEdit:disabled, QWidget#scrollAreaWidgetContents QComboBox:disabled { background: @wash; color: @muted; }
 QWidget#scrollAreaWidgetContents QComboBox QLineEdit { border: 0; padding: 0; }
 QWidget#scrollAreaWidgetContents QLineEdit:focus, QWidget#scrollAreaWidgetContents QComboBox:focus { border-color: @accent; }
-QTableWidget#twList { background: @surface; border: 1px solid @edge; border-radius: 5px; color: @ink; selection-background-color: @selection; selection-color: @ink; }
+QTableWidget#twList { background: @surface; border: 1px solid @edge; border-radius: 5px; color: @ink; selection-background-color: @accent; selection-color: @onAccent; }
 QTableWidget#twList::item { padding: 3px 8px; }
 QTableWidget#twList QHeaderView::section { background: @canvas; color: @ink; border: 0; border-bottom: 1px solid @edge; padding: 5px 8px; font-size: 12px; font-weight: bold; }
 

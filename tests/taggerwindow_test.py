@@ -146,3 +146,48 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
     assert window.close()
     saved = json.loads(config[0].Runtime_Options__config.settings_file.read_text(encoding="utf-8"))
     assert saved["internal"]["archive_list_height"] == list_height
+
+
+@pytest.mark.parametrize("window_color", ["white", "black"])
+def test_workspace_field_and_selection_contrast(workspace, window_color):
+    from PyQt6 import QtGui
+
+    def contrast(first, second):
+        def luminance(color):
+            channels = [color.redF(), color.greenF(), color.blueF()]
+            linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in channels]
+            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        low, high = sorted((luminance(first), luminance(second)))
+        return (high + 0.05) / (low + 0.05)
+
+    palette = workspace.palette()
+    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(window_color))
+    workspace.setPalette(palette)
+    workspace.show_editor()
+    table = workspace.fileSelectionList.twList
+    workspace.resize(1200, 900)
+    table.setRowCount(3)
+    for row in range(3):
+        table.setItem(row, 0, QtWidgets.QTableWidgetItem(f"Archive {row}"))
+    table.setRangeSelected(QtWidgets.QTableWidgetSelectionRange(0, 0, 1, 0), True)
+    table.setFocus()
+    workspace.splitter.setSizes([400, 200])
+    QtWidgets.QApplication.processEvents()
+
+    for field in (workspace.leTitle, workspace.cbFormat):
+        image = field.grab().toImage()
+        x = image.width() // 2
+        assert contrast(image.pixelColor(x, 0), image.pixelColor(x, image.height() // 2)) >= 3
+
+    image = table.viewport().grab().toImage()
+    scale = image.devicePixelRatio()
+
+    def row_background(row):
+        point = table.visualItemRect(table.item(row, 0)).center()
+        assert table.viewport().rect().contains(point)
+        return image.pixelColor(round(point.x() * scale), round(point.y() * scale))
+
+    for row in (0, 1):
+        assert contrast(row_background(row), row_background(2)) >= 3
+        assert contrast(row_background(row), table.palette().highlightedText().color()) >= 4.5
