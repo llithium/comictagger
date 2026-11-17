@@ -115,7 +115,7 @@ class FileSelectionList(QtWidgets.QWidget):
         self.twList.setShowGrid(False)
         header = self.twList.horizontalHeader()
         header.setMinimumSectionSize(54)
-        header.setSectionResizeMode(self.fileColNum, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.twList.setColumnWidth(self.fileColNum, 70 * self.twList.fontMetrics().averageCharWidth())
         header.setSectionResizeMode(self.MDFlagColNum, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         header.setDefaultAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.twList.setColumnWidth(self.folderColNum, 260)
@@ -395,10 +395,10 @@ class FileSelectionList(QtWidgets.QWidget):
             self.rar_ro_message()
 
         # Adjust column size
-        self.twList.resizeColumnsToContents()
         self.twList.resizeColumnToContents(FileSelectionList.readonlyColNum)
         self.twList.setColumnWidth(FileSelectionList.typeColNum, 45)
         self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
+        self.twList.resizeColumnToContents(FileSelectionList.folderColNum)
         if self.twList.columnWidth(FileSelectionList.folderColNum) > 250:
             self.twList.setColumnWidth(FileSelectionList.folderColNum, 250)
 

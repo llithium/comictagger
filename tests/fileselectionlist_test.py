@@ -182,6 +182,27 @@ def test_loading_paths_adds_archives_after_background_probe(tmp_path, config, qt
     assert file_list.get_current_archive().path == source_path
 
 
+def test_archive_column_keeps_manual_width_when_loading_archives(tmp_comic, tmp_path, config, qtbot):
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    file_list.show()
+    file_list.add_path_list([str(tmp_comic.path)])
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+
+    table = file_list.twList
+    column = file_list.fileColNum
+    assert table.horizontalHeader().sectionResizeMode(column) == QtWidgets.QHeaderView.ResizeMode.Interactive
+    width = table.viewport().width() + 100
+    table.setColumnWidth(column, width)
+
+    second = tmp_path / "second.cbz"
+    shutil.copy(tmp_comic.path, second)
+    file_list.add_path_list([str(second)])
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    assert table.columnWidth(column) == width
+    assert table.horizontalScrollBar().maximum() > 0
+
+
 def test_tags_column_fits_all_detected_formats(tmp_comic, config, qtbot) -> None:
     file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
     qtbot.addWidget(file_list)

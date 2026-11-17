@@ -784,6 +784,9 @@
                   </item>
                   <item row="17" column="0" colspan="3">
                    <widget class="QLineEdit" name="leAltSeries">
+                    <property name="accessibleName">
+                     <string>Alternate series</string>
+                    </property>
                     <property name="acceptDrops">
                      <bool>false</bool>
                     </property>
@@ -801,6 +804,9 @@
                   </item>
                   <item row="17" column="3">
                    <widget class="QLineEdit" name="leAltIssueNum">
+                    <property name="accessibleName">
+                     <string>Alternate issue</string>
+                    </property>
                     <property name="sizePolicy">
                      <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
                       <horstretch>0</horstretch>
@@ -824,6 +830,9 @@
                   </item>
                   <item row="17" column="4" colspan="2">
                    <widget class="QLineEdit" name="leAltIssueCount">
+                    <property name="accessibleName">
+                     <string>Alternate issue count</string>
+                    </property>
                     <property name="acceptDrops">
                      <bool>false</bool>
                     </property>

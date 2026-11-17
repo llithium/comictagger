@@ -59,6 +59,12 @@ def workspace(plugin_config, qtbot, monkeypatch):
     return window
 
 
+def test_alternate_numbering_has_distinct_accessible_names(workspace):
+    assert workspace.leAltSeries.accessibleName() == "Alternate series"
+    assert workspace.leAltIssueNum.accessibleName() == "Alternate issue"
+    assert workspace.leAltIssueCount.accessibleName() == "Alternate issue count"
+
+
 def test_workspace_follows_palette_changes(workspace):
     from PyQt6 import QtGui
 
