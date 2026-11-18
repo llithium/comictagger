@@ -21,6 +21,7 @@ TODO: This should be re-factored using subclasses!
 from __future__ import annotations
 
 import logging
+import math
 import pathlib
 
 from PyQt6 import QtCore, QtGui, QtNetwork, QtWidgets, uic
@@ -54,6 +55,7 @@ def clickable(widget: QtWidgets.QWidget) -> QtCore.pyqtBoundSignal:
 
 
 class CoverImageWidget(QtWidgets.QWidget):
+    widthAtFullHeightChanged = QtCore.pyqtSignal(int)
     ArchiveMode = 0
     AltCoverMode = 1
     URLMode = 2
@@ -99,6 +101,7 @@ class CoverImageWidget(QtWidgets.QWidget):
         else:
             self.graphicsView.setToolTip("")
         self.graphicsView.setScene(self.scene)
+        self.frame.installEventFilter(self)
 
         self.update_content()
 
@@ -259,23 +262,17 @@ class CoverImageWidget(QtWidgets.QWidget):
         self.current_pixmap = QtGui.QPixmap(":/graphics/nocover.png")
         self.set_display_pixmap()
 
-    def resizeEvent(self, resize_event: QtGui.QResizeEvent) -> None:
-        if self.current_pixmap is not None:
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Type.Resize and obj is self.frame:
             self.set_display_pixmap()
+        return super().eventFilter(obj, event)
 
     def set_display_pixmap(self) -> None:
-        """The deltas let us know what the new width and height of the label will be"""
-
-        new_w = self.frame.width()
-        new_h = self.frame.height()
         frame_w = self.frame.width()
         frame_h = self.frame.height()
-
-        new_h -= 8
-        new_w -= 8
-
-        new_h = max(new_h, 0)
-        new_w = max(new_w, 0)
+        padding = 8
+        new_h = max(frame_h - padding, 0)
+        new_w = max(frame_w - padding, 0)
 
         # scale the pixmap to fit in the frame
         scaled_pixmap = self.current_pixmap.scaled(
@@ -296,6 +293,9 @@ class CoverImageWidget(QtWidgets.QWidget):
         self.scene.setSceneRect(0, 0, img_w, img_h)
         self.graphicsView.resize(img_w + 2, img_h + 2)
         self.graphicsView.move(int((frame_w - img_w) / 2), int((frame_h - img_h) / 2))
+        if not self.current_pixmap.isNull() and new_h:
+            full_width = math.ceil(new_h * self.current_pixmap.width() / self.current_pixmap.height())
+            self.widthAtFullHeightChanged.emit(full_width + padding)
 
     def show_popup(self) -> None:
         ImagePopup(self, self.current_pixmap)

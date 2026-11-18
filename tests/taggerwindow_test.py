@@ -279,7 +279,7 @@ def test_web_link_removal_and_localized_rating_round_trip(workspace, tmp_comic, 
     assert saved.critical_rating == 2.5
 
 
-def test_archive_pane_restores_height_after_welcome(plugin_config, qtbot, monkeypatch):
+def test_workspace_restores_dividers_after_welcome(plugin_config, qtbot, monkeypatch):
     from PyQt6 import QtNetwork
 
     from comictaggerlib.taggerwindow import TaggerWindow
@@ -288,6 +288,7 @@ def test_archive_pane_restores_height_after_welcome(plugin_config, qtbot, monkey
     config[0].internal__window_height = 960
     config[0].internal__window_width = 1200
     config[0].internal__archive_list_height = 245
+    config[0].internal__cover_sidebar_width = 222
     config[0].Dialog_Flags__show_disclaimer = False
     config[0].Dialog_Flags__notify_plugin_changes = False
     monkeypatch.setattr(TaggerWindow, "setup_logger", lambda window: QtWidgets.QDialog(window))
@@ -298,6 +299,7 @@ def test_archive_pane_restores_height_after_welcome(plugin_config, qtbot, monkey
     window.show_editor()
     QtWidgets.QApplication.processEvents()
     assert abs(window.splitter.sizes()[1] - 245) <= 1
+    assert window.editorSplitter.sizes()[0] == 222
 
 
 def test_delayed_save_confirmation_is_bound_to_archive(workspace, tmp_comic, qtbot, monkeypatch):
@@ -456,6 +458,53 @@ def test_portrait_cover_uses_the_available_editor_height(workspace, tmp_comic, q
     cover = workspace.archiveCoverWidget
     qtbot.waitUntil(lambda: cover.comic_archive is not None and cover.page_loader is None)
     assert cover.scene.sceneRect().height() >= 320
+
+
+def test_cover_divider_stops_when_the_page_fills_the_available_height(workspace, tmp_comic, qtbot):
+    workspace.resize(1400, 940)
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    cover = workspace.archiveCoverWidget
+    qtbot.waitUntil(lambda: cover.comic_archive is not None and cover.page_loader is None)
+    divider = workspace.editorSplitter
+    assert divider.orientation() == QtCore.Qt.Orientation.Horizontal
+    handle = divider.handle(1)
+
+    def drag(distance):
+        center = handle.rect().center()
+        end = center + QtCore.QPoint(distance, 0)
+        qtbot.mousePress(handle, QtCore.Qt.MouseButton.LeftButton, pos=center)
+        qtbot.mouseMove(handle, pos=end)
+        qtbot.mouseRelease(handle, QtCore.Qt.MouseButton.LeftButton, pos=center)
+        QtWidgets.QApplication.processEvents()
+
+    def assert_cover_fills_frame():
+        image = cover.scene.sceneRect()
+        assert abs(divider.sizes()[0] - image.width() - 8) <= 1
+        assert abs(cover.frame.height() - image.height() - 8) <= 1
+
+    drag(-150)
+    narrow = divider.sizes()[0]
+    small_image = cover.scene.sceneRect().width()
+    drag(600)
+    wide = divider.sizes()[0]
+    assert wide > narrow
+    assert cover.scene.sceneRect().width() > small_image
+    assert_cover_fills_frame()
+    drag(100)
+    assert divider.sizes()[0] == wide
+    assert workspace.config[0].internal__cover_sidebar_width == wide
+
+    workspace.splitter.setSizes([610, 210])
+    qtbot.waitUntil(lambda: divider.sizes()[0] < wide)
+    drag(600)
+    assert_cover_fills_frame()
+
+    portrait_limit = workspace.coverSidebar.maximumWidth()
+    cover.btnRight.click()
+    qtbot.waitUntil(lambda: cover.imageIndex == 1 and cover.page_loader is None)
+    qtbot.waitUntil(lambda: workspace.coverSidebar.maximumWidth() > portrait_limit)
+    drag(600)
+    assert_cover_fills_frame()
 
 
 def test_archive_pane_keeps_a_complete_row_in_a_compact_window(workspace, tmp_comic, qtbot):

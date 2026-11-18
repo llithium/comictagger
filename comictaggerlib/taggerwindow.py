@@ -383,24 +383,30 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
 
     def configure_workspace(self) -> None:
-        sidebar_width = 288
-        self.coverImageContainer.setFixedWidth(sidebar_width)
         self.coverImageContainer.setMinimumHeight(116)
         self.coverImageContainer.setMaximumHeight(480)
-        self.frameInfoBox.setFixedWidth(sidebar_width)
+        self.verticalLayout.setContentsMargins(0, 0, 0, 0)
         self.verticalLayout.setStretch(0, 1)
         self.verticalLayout.setSpacing(8)
+        self.editorSplitter.setChildrenCollapsible(False)
+        self.editorSplitter.setStretchFactor(0, 0)
+        self.editorSplitter.setStretchFactor(1, 1)
+        self.editorSplitter.setHandleWidth(self.splitter.handleWidth())
+        self.editorSplitter.setSizes([self.config[0].internal__cover_sidebar_width, 1])
+        self.editorSplitter.splitterMoved.connect(self.remember_cover_sidebar_width)
+        self.archiveCoverWidget.widthAtFullHeightChanged.connect(
+            self.limit_cover_sidebar_width, QtCore.Qt.ConnectionType.QueuedConnection
+        )
         self.field_labels = {
             label.buddy(): (label, label.text())
             for label in self.tabWidget.findChildren(QtWidgets.QLabel)
             if label.buddy() is not None
         }
         self.horizontalLayout_2.setContentsMargins(6, 0, 6, 4)
-        self.horizontalLayout_2.setSpacing(18)
         self.gridLayout_5.setContentsMargins(5, 2, 5, 4)
         self.gridLayout.setContentsMargins(18, 12, 18, 8)
         self.gridLayout_6.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        for combo in (self.cbLanguage, self.cbCountry):
+        for combo in (self.cbLanguage, self.cbCountry, self.cbx_sources):
             combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.currentTextChanged.connect(combo.setToolTip)
         self.splitter.setChildrenCollapsible(False)
@@ -455,6 +461,15 @@ class TaggerWindow(QtWidgets.QMainWindow):
         welcome_layout.addWidget(blank, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.gridLayout.addWidget(self.welcome, 0, 0)
         self.apply_workspace_style()
+
+    def remember_cover_sidebar_width(self) -> None:
+        self.config[0].internal__cover_sidebar_width = self.editorSplitter.sizes()[0]
+
+    def limit_cover_sidebar_width(self, width: int) -> None:
+        limit = max(width, self.coverSidebar.minimumSizeHint().width())
+        if self.coverSidebar.maximumWidth() != limit:
+            self.coverSidebar.setMaximumWidth(limit)
+            self.editorSplitter.setSizes([min(self.config[0].internal__cover_sidebar_width, limit), 1])
 
     def show_editor(self) -> None:
         entering_editor = not self.welcome.isHidden()

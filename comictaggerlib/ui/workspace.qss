@@ -41,8 +41,8 @@ QTabWidget#tabWidget::tab-bar { alignment: left; }
 QTabWidget#tabWidget QTabBar, QTabWidget#tabWidget QTabBar::tab { background: @canvas; }
 QTabWidget#tabWidget QTabBar::tab:selected { background: @surface; }
 QWidget#scrollAreaWidgetContents QComboBox::drop-down { border: 0; width: 23px; }
-QSplitter#splitter::handle { background: @canvas; }
-QSplitter#splitter::handle:hover { background: @edge; }
+QSplitter#splitter::handle, QSplitter#editorSplitter::handle { background: @canvas; }
+QSplitter#splitter::handle:hover, QSplitter#editorSplitter::handle:hover { background: @edge; }
 QWidget#scrollAreaWidgetContents QComboBox::down-arrow { image: url("@chevron"); width: 12px; height: 8px; }
 
 QWidget#scrollAreaWidgetContents QCheckBox::indicator:unchecked {
