@@ -105,7 +105,11 @@ class FileSelectionList(QtWidgets.QWidget):
     dataColNum = fileColNum
 
     def __init__(
-        self, parent: QtWidgets.QWidget, config: ct_ns, dirty_flag_verification: Callable[[str, str], bool]
+        self,
+        parent: QtWidgets.QWidget,
+        config: ct_ns,
+        dirty_flag_verification: Callable[[str, str], bool],
+        review_blank_draft: Callable[[ComicArchive], bool] | None = None,
     ) -> None:
         super().__init__(parent)
 
@@ -150,6 +154,7 @@ class FileSelectionList(QtWidgets.QWidget):
         self.loaded_paths: set[pathlib.Path] = set()
 
         self.dirty_flag_verification = dirty_flag_verification
+        self.review_blank_draft = review_blank_draft
         self.rar_ro_shown = False
         self.path_load_threads: set[PathLoadThread] = set()
         self.path_load_dialogs: dict[PathLoadThread, QtWidgets.QProgressDialog] = {}
@@ -384,10 +389,15 @@ class FileSelectionList(QtWidgets.QWidget):
             return
 
         if prepared_items and self.twList.rowCount() == 0 and self.dirty_flag:
-            if not self._verify_draft_transition(
-                "Open Archive", "Discard your blank metadata draft and open the archive?"
-            ):
-                return
+            with self.defer_path_loads():
+                target = prepared_items[0].archive
+                if self.review_blank_draft is not None:
+                    if not self.review_blank_draft(target) or not target.path.exists():
+                        return
+                elif not self.dirty_flag_verification(
+                    "Open Archive", "Discard your blank metadata draft and open the archive?"
+                ):
+                    return
 
         first_added = None
         rar_added_ro = False

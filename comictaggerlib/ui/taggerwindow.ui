@@ -950,6 +950,9 @@
                       <property name="text">
                        <string>Hash Type</string>
                       </property>
+                      <property name="buddy">
+                       <cstring>cbHashName</cstring>
+                      </property>
                      </widget>
                     </item>
                    </layout>

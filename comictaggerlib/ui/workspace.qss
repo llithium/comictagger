@@ -35,7 +35,6 @@ QTableWidget#twList { background: @surface; border: 1px solid @edge; border-radi
 QTableWidget#twList::item { padding: 3px 8px; }
 QTableWidget#twList QHeaderView::section { background: @canvas; color: @ink; border: 0; border-bottom: 1px solid @edge; padding: 5px 8px; font-size: @smallText; font-weight: bold; }
 
-QLabel#tagSupportHint { color: @muted; font-size: @smallText; padding: 3px 0; }
 QWidget#coverImageContainer QPushButton { background: @surface; color: @accent; border: 1px solid @edge; border-radius: 4px; font-size: @headingText; }
 QWidget#coverImageContainer QPushButton:focus { border-color: palette(highlight); }
 QTabWidget#tabWidget::tab-bar { alignment: left; }
