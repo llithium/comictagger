@@ -23,8 +23,10 @@ import logging
 import operator
 import os
 import platform
+import queue
 import sys
 import textwrap
+import threading
 import traceback
 import webbrowser
 from collections.abc import Sequence
@@ -72,39 +74,32 @@ from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 logger = logging.getLogger(__name__)
 
 
-class QueryThread(QtCore.QThread):
-    finish = QtCore.pyqtSignal(GenericMetadata)
-    error = QtCore.pyqtSignal(object)
-    ratelimit = QtCore.pyqtSignal(float, float)
+class IssueLookup(threading.Thread):
+    """Run provider code independently of the lifetime of the Qt application."""
 
-    def __init__(
-        self,
-        talker: ComicTalker,
-        issue_id: str,
-        series_id: str,
-        issue_number: str,
-    ) -> None:
-        super().__init__()
+    def __init__(self, talker: ComicTalker, issue_id: str, series_id: str, issue_number: str) -> None:
+        super().__init__(daemon=True)
+        self.talker = talker
         self.issue_id = issue_id
         self.series_id = series_id
         self.issue_number = issue_number
-        self.talker = talker
+        self.messages: queue.SimpleQueue[GenericMetadata | Exception | tuple[float, float]] = queue.SimpleQueue()
 
     def run(self) -> None:
         try:
-            new_metadata = self.talker.fetch_comic_data(
+            metadata = self.talker.fetch_comic_data(
                 issue_id=self.issue_id,
                 series_id=self.series_id,
                 issue_number=self.issue_number,
-                on_rate_limit=RLCallBack(lambda x, y: self.ratelimit.emit(x, y), 60),
+                on_rate_limit=RLCallBack(lambda full, delay: self.messages.put((full, delay)), 60),
             )
-            if not isinstance(new_metadata, GenericMetadata):
+            if not isinstance(metadata, GenericMetadata):
                 raise ValueError("The metadata source returned an invalid issue.")
-        except Exception as e:
+        except Exception as error:
             logger.exception("Failed to fetch issue metadata")
-            self.error.emit(e)
-            return
-        self.finish.emit(new_metadata)
+            self.messages.put(error)
+        else:
+            self.messages.put(metadata)
 
 
 class TaggerWindow(QtWidgets.QMainWindow):
@@ -184,8 +179,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.config = config
         self.talkers = talkers
         self.selector: SeriesSelectionWindow | None = None
-        self._query_threads: set[QueryThread] = set()
-        self._close_after_queries = False
+        self._issue_lookup: IssueLookup | None = None
+        self._lookup_timer = QtCore.QTimer(self)
+        self._lookup_timer.setInterval(50)
+        self._lookup_timer.timeout.connect(self._poll_issue_lookup)
         self.log_window = self.setup_logger()
 
         self.archiveCoverWidget = CoverImageWidget(self.coverImageContainer, CoverImageWidget.ArchiveMode, None)
@@ -963,6 +960,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.connect_child_dirty_flag_signals(child)
 
     def clear_form(self) -> None:
+        self._forget_issue_lookup()
         self.selector = None
         # get a minty fresh metadata object
         self.metadata = GenericMetadata()
@@ -1294,6 +1292,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             autoselect,
             literal,
         )
+        self._forget_issue_lookup()
         self.selector = selector
         selector.ratelimit.connect(self.on_ratelimit)
         selector.setWindowTitle(f"Search: '{series_name}' - Select Series")
@@ -1304,36 +1303,36 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if self.selector is not selector:
             return
 
-        thread = QueryThread(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
-        thread.setParent(selector)
-        self._query_threads.add(thread)
+        self._issue_lookup = IssueLookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
+        self._issue_lookup.start()
+        self._lookup_timer.start()
 
-        def apply_result(metadata: GenericMetadata) -> None:
-            if self.selector is selector:
-                self.apply_query_metadata(metadata)
+    def _forget_issue_lookup(self) -> None:
+        self._lookup_timer.stop()
+        self._issue_lookup = None
 
-        def report_error(error: Exception) -> None:
-            if self.selector is selector:
-                title = f"{error.source} {error.code_name} Error" if isinstance(error, TalkerError) else "Search failed"
-                OptionalMessageDialog.critical(self, title, str(error))
+    def _poll_issue_lookup(self) -> None:
+        lookup = self._issue_lookup
+        while lookup is not None and lookup is self._issue_lookup:
+            try:
+                message = lookup.messages.get_nowait()
+            except queue.Empty:
+                return
 
-        def report_rate_limit(full_time: float, sleep_time: float) -> None:
-            if self.selector is selector:
-                self.on_ratelimit(full_time, sleep_time)
+            if isinstance(message, tuple):
+                self.on_ratelimit(*message)
+                continue
 
-        thread.finish.connect(apply_result)
-        thread.error.connect(report_error)
-        thread.ratelimit.connect(report_rate_limit)
-        thread.finished.connect(functools.partial(self._query_thread_finished, thread))
-        thread.start()
-
-    def _query_thread_finished(self, thread: QueryThread) -> None:
-        self._query_threads.remove(thread)
-        thread.deleteLater()
-        if self._close_after_queries and not self._query_threads:
-            self._close_after_queries = False
-            self.statusBar().clearMessage()
-            QtCore.QTimer.singleShot(0, self.close)
+            self._forget_issue_lookup()
+            if isinstance(message, Exception):
+                title = (
+                    f"{message.source} {message.code_name} Error"
+                    if isinstance(message, TalkerError)
+                    else "Search failed"
+                )
+                OptionalMessageDialog.critical(self, title, str(message))
+            else:
+                self.apply_query_metadata(message)
 
     def apply_query_metadata(self, new_metadata: GenericMetadata) -> None:
         # copy the form onto metadata object
@@ -2204,15 +2203,12 @@ class TaggerWindow(QtWidgets.QMainWindow):
             return False
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if self._query_threads:
-            self._close_after_queries = True
-            self.statusBar().showMessage("Waiting for online lookups before closing.")
-            event.ignore()
-            return
-
+        self._lookup_timer.stop()
         if self.dirty_flag_verification(
             f"Exit {self.appName}", "If you quit now, data in the form will be lost.  Are you sure?"
         ):
+            self._forget_issue_lookup()
+            self.selector = None
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()
             self.config[0].internal__window_height = appsize.height()
@@ -2230,6 +2226,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
             event.accept()
         else:
+            if self._issue_lookup is not None:
+                self._lookup_timer.start()
             event.ignore()
 
     def show_page_browser(self) -> None:

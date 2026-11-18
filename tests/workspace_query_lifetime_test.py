@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 from unittest.mock import Mock
 
@@ -10,47 +12,67 @@ from comicapi.genericmetadata import GenericMetadata
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
 
-def test_closing_waits_for_all_outstanding_issue_lookups(workspace, qtbot, monkeypatch):
-    from comictaggerlib.taggerwindow import QueryThread
-
+def test_close_can_be_cancelled_or_accepted_while_provider_is_blocked(workspace, qtbot, monkeypatch):
     workspace.show_editor()
-    verify_draft = Mock(return_value=True)
-    monkeypatch.setattr(workspace, "dirty_flag_verification", verify_draft)
+    release = threading.Event()
+    started = threading.Event()
 
-    def lookup(release):
-        assert release.wait(5)
+    def fetch(**kwargs):
+        started.set()
+        release.wait()
+        kwargs["on_rate_limit"].callback(60, 10)
         return GenericMetadata(series="Matched series")
 
-    def start_lookup():
-        release = threading.Event()
-        selector = QtWidgets.QDialog(workspace)
-        selector.talker = Mock()
-        selector.talker.fetch_comic_data.side_effect = lambda **kwargs: lookup(release)
-        selector.issue_id, selector.series_id, selector.issue_number = "13", "7", "2"
-        workspace.selector = selector
-        workspace.finish_query(selector)
-        return selector.findChild(QueryThread), release
-
-    first, release_first = start_lookup()
-    second, release_second = start_lookup()
+    selector = QtWidgets.QDialog(workspace)
+    selector.talker = Mock()
+    selector.talker.fetch_comic_data.side_effect = fetch
+    selector.issue_id, selector.series_id, selector.issue_number = "13", "7", "2"
+    workspace.selector = selector
+    rate_limit = Mock()
+    monkeypatch.setattr(workspace, "on_ratelimit", rate_limit)
+    verify = Mock(side_effect=[False, True])
+    monkeypatch.setattr(workspace, "dirty_flag_verification", verify)
+    workspace.finish_query(selector)
+    worker = workspace._issue_lookup
     try:
+        qtbot.waitUntil(started.is_set)
         assert not workspace.close()
+        assert workspace._lookup_timer.isActive()
         assert workspace.isVisible()
-        verify_draft.assert_not_called()
-
-        with qtbot.waitSignal(second.finished, timeout=5000):
-            release_second.set()
-
-        assert workspace.isVisible()
-        verify_draft.assert_not_called()
-
-        with qtbot.waitSignal(first.finished, timeout=5000):
-            release_first.set()
-
-        qtbot.waitUntil(lambda: not workspace.isVisible())
-        verify_draft.assert_called_once()
+        assert workspace.close()
+        assert not workspace.isVisible()
+        assert worker.is_alive()
+        assert verify.call_count == 2
     finally:
-        release_first.set()
-        release_second.set()
-        qtbot.waitUntil(lambda: not workspace.findChildren(QueryThread))
-        workspace.clear_dirty_flag()
+        release.set()
+        worker.join(timeout=5)
+
+    workspace._poll_issue_lookup()
+    assert workspace.leSeries.text() == ""
+    rate_limit.assert_not_called()
+
+
+def test_process_exits_with_unresponsive_issue_provider():
+    # A join at interpreter shutdown would hang even after the window disappears.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import threading
+from comictaggerlib.taggerwindow import IssueLookup
+
+started = threading.Event()
+class BlockedProvider:
+    def fetch_comic_data(self, **kwargs):
+        started.set()
+        threading.Event().wait()
+
+worker = IssueLookup(BlockedProvider(), "13", "7", "2")
+worker.start()
+assert started.wait(3)
+""",
+        ],
+        timeout=10,
+        check=True,
+    )
