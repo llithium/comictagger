@@ -5,14 +5,14 @@ from __future__ import annotations
 import io
 import logging
 import webbrowser
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
 try:
     from PyQt6 import QtGui, QtWidgets
     from PyQt6.QtCore import Qt, QUrl
-    from PyQt6.QtGui import QGuiApplication, QPalette
+    from PyQt6.QtGui import QGuiApplication
     from PyQt6.QtWidgets import QWidget
 
     qt_available = True
@@ -23,7 +23,6 @@ try:
         pil_available = True
     except ImportError:
         pil_available = False
-    active_palette: QPalette | None = None
 
     try:
         from PyQt6.QtWebEngineCore import QWebEnginePage
@@ -146,65 +145,18 @@ try:
             img.load(":/graphics/nocover.png")
         return img
 
-    def enable_widget(widget: QtWidgets.QWidget | Collection[QtWidgets.QWidget], enable: bool) -> None:
+    def enable_widget(widget: QtWidgets.QWidget | Sequence[QtWidgets.QWidget], enable: bool) -> None:
         if isinstance(widget, Sequence):
-            for w in widget:
-                _enable_widget(w, enable)
-        else:
-            _enable_widget(widget, enable)
-
-    def _enable_widget(widget: QtWidgets.QWidget, enable: bool) -> None:
-        if widget is None or active_palette is None:
+            for child in widget:
+                enable_widget(child, enable)
             return
-        active_color = active_palette.color(QtGui.QPalette.ColorRole.Base)
 
-        inactive_color = QtGui.QColor(255, 170, 150)
-        inactive_brush = QtGui.QBrush(inactive_color)
-        active_brush = QtGui.QBrush(active_color)
-
-        def palettes() -> tuple[QtGui.QPalette, QtGui.QPalette, QtGui.QPalette]:
-            inactive_palette1 = QtGui.QPalette(active_palette)
-            inactive_palette1.setColor(QtGui.QPalette.ColorRole.Base, inactive_color)
-
-            inactive_palette2 = QtGui.QPalette(active_palette)
-            inactive_palette2.setColor(widget.backgroundRole(), inactive_color)
-
-            inactive_palette3 = QtGui.QPalette(active_palette)
-            inactive_palette3.setColor(QtGui.QPalette.ColorRole.Base, inactive_color)
-            inactive_palette3.setColor(widget.foregroundRole(), inactive_color)
-            return inactive_palette1, inactive_palette2, inactive_palette3
-
-        if hasattr(widget, "setEnabled"):
-            widget.setEnabled(enable)
-
-        if enable:
-            if isinstance(widget, QtWidgets.QTableWidgetItem):
-                widget.setBackground(active_brush)
-                return
-
-            widget.setAutoFillBackground(False)
-            widget.setPalette(active_palette)
-            if isinstance(widget, (QtWidgets.QTextEdit, QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox)):
-                widget.setReadOnly(False)
-            elif isinstance(widget, QtWidgets.QListWidget):
-                widget.setMovement(QtWidgets.QListWidget.Movement.Free)
-        else:
-            if isinstance(widget, QtWidgets.QTableWidgetItem):
-                widget.setBackground(inactive_brush)
-                return
-
-            widget.setAutoFillBackground(True)
-            if isinstance(widget, (QtWidgets.QCheckBox, QtWidgets.QComboBox, QtWidgets.QPushButton)):
-                inactive_palette = palettes()
-                widget.setPalette(inactive_palette[1])
-            elif isinstance(widget, (QtWidgets.QTextEdit, QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox)):
-                inactive_palette = palettes()
-                widget.setReadOnly(True)
-                widget.setPalette(inactive_palette[0])
-            elif isinstance(widget, QtWidgets.QListWidget):
-                inactive_palette = palettes()
-                widget.setPalette(inactive_palette[0])
-                widget.setMovement(QtWidgets.QListWidget.Movement.Static)
+        widget.setEnabled(enable)
+        if isinstance(widget, (QtWidgets.QTextEdit, QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox)):
+            widget.setReadOnly(not enable)
+        elif isinstance(widget, QtWidgets.QListWidget):
+            movement = QtWidgets.QListWidget.Movement
+            widget.setMovement(movement.Free if enable else movement.Static)
 
     def replaceWidget(
         layout: QtWidgets.QLayout | QtWidgets.QSplitter, old_widget: QtWidgets.QWidget, new_widget: QtWidgets.QWidget

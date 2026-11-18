@@ -231,3 +231,22 @@ def plugin_config(tmp_path, comicvine_api):
 @pytest.fixture
 def comic_cache(config, mock_version) -> Generator[comictalker.comiccacher.ComicCacher, Any, None]:
     yield comictalker.comiccacher.ComicCacher(config[0].Runtime_Options__config.user_cache_dir, mock_version[0])
+
+
+@pytest.fixture
+def workspace(plugin_config, qtbot, monkeypatch):
+    QtNetwork = pytest.importorskip("PyQt6.QtNetwork")
+    QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
+
+    from comictaggerlib.taggerwindow import TaggerWindow
+
+    monkeypatch.setattr(TaggerWindow, "setup_logger", lambda window: QtWidgets.QDialog(window))
+    config, talkers = plugin_config
+    config[0].Dialog_Flags__show_disclaimer = False
+    config[0].Dialog_Flags__notify_plugin_changes = False
+    config[0].General__prompt_on_save = False
+    window = TaggerWindow(config, talkers, QtNetwork.QLocalServer())
+    qtbot.addWidget(window)
+    window.show()
+    window._post_show([])
+    return window

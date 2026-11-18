@@ -20,7 +20,8 @@ import logging
 import os
 import pathlib
 import platform
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
 
@@ -83,10 +84,12 @@ class PathLoadThread(QtCore.QThread):
                 prepared = prepare_path_item(path, self.nocover_path, self.preferred_hash)
                 if prepared is not None:
                     prepared_items.append(prepared)
-            self.loaded.emit(prepared_items)
+            if not self.isInterruptionRequested():
+                self.loaded.emit(prepared_items)
         except Exception as error:
             logger.exception("Failed while loading comic paths")
-            self.error.emit(error)
+            if not self.isInterruptionRequested():
+                self.error.emit(error)
 
 
 class FileSelectionList(QtWidgets.QWidget):
@@ -111,8 +114,16 @@ class FileSelectionList(QtWidgets.QWidget):
 
         self.config = config
         self.twList: QtWidgets.QTableWidget
-        self.twList.horizontalHeader().setMinimumSectionSize(50)
+        self.twList.verticalHeader().hide()
+        self.twList.setShowGrid(False)
+        header = self.twList.horizontalHeader()
+        header.setMinimumSectionSize(54)
+        self.twList.setColumnWidth(self.fileColNum, 70 * self.twList.fontMetrics().averageCharWidth())
+        header.setSectionResizeMode(self.MDFlagColNum, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setDefaultAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.twList.setColumnWidth(self.folderColNum, 260)
         self.twList.currentItemChanged.connect(self.current_item_changed_cb)
+        self.twList.horizontalScrollBar().rangeChanged.connect(self.update_minimum_height)
 
         self.currentItem = None
         self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -142,6 +153,20 @@ class FileSelectionList(QtWidgets.QWidget):
         self.rar_ro_shown = False
         self.path_load_threads: set[PathLoadThread] = set()
         self.path_load_dialogs: dict[PathLoadThread, QtWidgets.QProgressDialog] = {}
+        self._verifying_draft_transition = False
+        self._deferred_path_loads: list[list[PreparedPathItem]] = []
+
+    def update_minimum_height(self) -> None:
+        table = self.twList
+        scrollbar = table.horizontalScrollBar()
+        height = (
+            2 * table.frameWidth()
+            + table.horizontalHeader().sizeHint().height()
+            + table.verticalHeader().defaultSectionSize()
+        )
+        if scrollbar.maximum() > 0:
+            height += scrollbar.sizeHint().height()
+        table.setMinimumHeight(height)
 
     @staticmethod
     def reveal_action_text() -> str:
@@ -296,42 +321,38 @@ class FileSelectionList(QtWidgets.QWidget):
     def get_current_archive(self) -> ComicArchive | None:
         return self.get_archive_by_row(self.twList.currentRow())
 
-    def remove_selection(self) -> None:
-        row_list = []
-        for item in self.twList.selectedItems():
-            if item.column() == 0:
-                row_list.append(item.row())
+    @contextmanager
+    def defer_path_loads(self) -> Iterator[None]:
+        already_deferred = self._verifying_draft_transition
+        self._verifying_draft_transition = True
+        try:
+            yield
+        finally:
+            self._verifying_draft_transition = already_deferred
+            if not already_deferred and self._deferred_path_loads:
+                # Resume after the caller accepts the transition or restores the selection.
+                QtCore.QTimer.singleShot(0, self._finish_deferred_path_loads)
 
-        if not row_list:
+    def _verify_draft_transition(self, title: str, description: str) -> bool:
+        with self.defer_path_loads():
+            return self.dirty_flag_verification(title, description)
+
+    def _finish_deferred_path_loads(self) -> None:
+        pending_loads, self._deferred_path_loads = self._deferred_path_loads, []
+        for prepared_items in pending_loads:
+            self._finish_path_load(prepared_items)
+
+    def remove_selection(self) -> None:
+        archives = self.get_selected_archive_list()
+        if not archives:
             return
 
-        if self.twList.currentRow() in row_list:
-            if not self.dirty_flag_verification(
-                "Remove Archive", "If you close this archive, data in the form will be lost.  Are you sure?"
-            ):
-                return
+        if self.get_current_archive() in archives and not self._verify_draft_transition(
+            "Remove Archive", "If you close this archive, data in the form will be lost.  Are you sure?"
+        ):
+            return
 
-        row_list.sort()
-        row_list.reverse()
-
-        self.twList.currentItemChanged.disconnect(self.current_item_changed_cb)
-        self.twList.setSortingEnabled(False)
-
-        for i in row_list:
-            self.loaded_paths -= {self.get_archive_by_row(i).path}  # type: ignore[union-attr]
-            self.twList.removeRow(i)
-
-        self.twList.setSortingEnabled(True)
-        self.twList.currentItemChanged.connect(self.current_item_changed_cb)
-
-        if self.twList.rowCount() > 0:
-            # since on a removal, we select row 0, make sure callback occurs if
-            # we're already there
-            if self.twList.currentRow() == 0:
-                self.current_item_changed_cb(self.twList.currentItem(), None)
-            self.twList.selectRow(0)
-        else:
-            self.listCleared.emit()
+        self.remove_archive_list(archives)
 
     def add_path_list(self, pathlist: list[str], recursive: bool = True) -> None:
         if not pathlist:
@@ -358,6 +379,16 @@ class FileSelectionList(QtWidgets.QWidget):
         thread.start()
 
     def _finish_path_load(self, prepared_items: list[PreparedPathItem]) -> None:
+        if self._verifying_draft_transition:
+            self._deferred_path_loads.append(prepared_items)
+            return
+
+        if prepared_items and self.twList.rowCount() == 0 and self.dirty_flag:
+            if not self._verify_draft_transition(
+                "Open Archive", "Discard your blank metadata draft and open the archive?"
+            ):
+                return
+
         first_added = None
         rar_added_ro = False
         self.twList.setSortingEnabled(False)
@@ -368,12 +399,12 @@ class FileSelectionList(QtWidgets.QWidget):
                     if prepared.archive_type == "RAR" and not prepared.writable:
                         rar_added_ro = True
                     if first_added is None and row != -1:
-                        first_added = row
+                        first_added = self.twList.item(row, self.fileColNum)
         finally:
             self.twList.setSortingEnabled(True)
 
         if first_added is not None:
-            self.twList.selectRow(first_added)
+            self.twList.selectRow(first_added.row())
         else:
             OptionalMessageDialog.information(self, "File/Folder Open", "No readable comic archives were found.")
             return
@@ -382,15 +413,12 @@ class FileSelectionList(QtWidgets.QWidget):
             self.rar_ro_message()
 
         # Adjust column size
-        self.twList.resizeColumnsToContents()
-        self.twList.setColumnWidth(FileSelectionList.MDFlagColNum, 35)
-        self.twList.setColumnWidth(FileSelectionList.readonlyColNum, 35)
+        self.twList.resizeColumnToContents(FileSelectionList.readonlyColNum)
         self.twList.setColumnWidth(FileSelectionList.typeColNum, 45)
         self.twList.resizeColumnToContents(FileSelectionList.matchColNum)
-        if self.twList.columnWidth(FileSelectionList.fileColNum) > 250:
-            self.twList.setColumnWidth(FileSelectionList.fileColNum, 250)
-        if self.twList.columnWidth(FileSelectionList.folderColNum) > 200:
-            self.twList.setColumnWidth(FileSelectionList.folderColNum, 200)
+        self.twList.resizeColumnToContents(FileSelectionList.folderColNum)
+        if self.twList.columnWidth(FileSelectionList.folderColNum) > 250:
+            self.twList.setColumnWidth(FileSelectionList.folderColNum, 250)
 
     def _path_load_error(self, error: Exception) -> None:
         OptionalMessageDialog.critical(self, "File/Folder Open", f"Failed to load comic archives: {error}")
@@ -595,23 +623,32 @@ class FileSelectionList(QtWidgets.QWidget):
                 return
             ca = self.get_archive_by_row(new_idx)
             if not ca or not ca.path.exists():
-                self.remove_deleted()
+                if prev is not None and ca is not None:
+                    self._restore_current_item(prev)
+                    self.remove_archive_list([ca])
+                else:
+                    self.remove_deleted()
                 return
 
             # don't allow change if modified
             if prev is not None and new_idx != old_idx:
-                if not self.dirty_flag_verification(
+                if not self._verify_draft_transition(
                     "Change Archive", "If you change archives now, data in the form will be lost.  Are you sure?"
                 ):
-                    self.twList.currentItemChanged.disconnect(self.current_item_changed_cb)
-                    self.twList.setCurrentItem(prev)
-                    self.twList.currentItemChanged.connect(self.current_item_changed_cb)
-                    # Need to defer this revert selection, for some reason
-                    QtCore.QTimer.singleShot(1, self.revert_selection)
+                    self._restore_current_item(prev)
                     return
 
-            fi = self.twList.item(new_idx, FileSelectionList.dataColNum).data(QtCore.Qt.ItemDataRole.UserRole)
-            self.selectionChanged.emit(QtCore.QVariant(fi))
+            self.selectionChanged.emit(QtCore.QVariant(ca))
 
-    def revert_selection(self) -> None:
-        self.twList.selectRow(self.twList.currentRow())
+    def _restore_current_item(self, item: QtWidgets.QTableWidgetItem) -> None:
+        self.twList.currentItemChanged.disconnect(self.current_item_changed_cb)
+        self.twList.setCurrentItem(item)
+        self.twList.currentItemChanged.connect(self.current_item_changed_cb)
+        # Restore the row selection after Qt finishes handling the original selection.
+        index = QtCore.QPersistentModelIndex(self.twList.currentIndex())
+
+        def restore_selection() -> None:
+            if index.isValid() and self.twList.currentIndex() == index:
+                self.twList.selectRow(index.row())
+
+        QtCore.QTimer.singleShot(0, restore_selection)

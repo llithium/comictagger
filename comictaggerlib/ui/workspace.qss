@@ -1,0 +1,52 @@
+QWidget#centralWidget { background: @canvas; color: @ink; }
+QToolBar { background: @surface; border: 0; border-bottom: 1px solid @edge; padding: 3px 12px; spacing: 3px; }
+QToolBar QToolButton, QWidget#welcome QPushButton { color: @ink; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 6px 9px; font-size: @bodyText; }
+QToolBar QToolButton:hover, QWidget#welcome QPushButton:hover { background: @wash; }
+QToolBar QToolButton:disabled { color: palette(placeholder-text); }
+QToolBar::separator { width: 1px; background: @edge; margin: 7px 5px; }
+QToolBar QToolButton#saveTags:enabled, QWidget#welcome QPushButton#openArchive { background: @accent; color: @onAccent; font-weight: bold; }
+QWidget#welcome { background: @surface; border: 1px solid @edge; border-radius: 8px; }
+QWidget#welcome QLabel { color: @muted; }
+QWidget#welcome QLabel#welcomeTitle { color: @ink; font-size: @welcomeText; font-weight: bold; }
+QWidget#welcome QPushButton { background: @canvas; border-color: @edge; padding: 8px 16px; }
+QWidget#welcome QPushButton#blankEditor { color: @accent; background: transparent; border-color: transparent; }
+QWidget#welcome QPushButton:focus, QWidget#welcome QPushButton#blankEditor:focus, QToolBar QToolButton:focus { border-color: palette(highlight); }
+QLabel#lblFilename { color: @ink; font-size: @headingText; font-weight: bold; }
+QLabel#lblArchiveType, QLabel#lblPageCount, QLabel#lblTagList { color: @muted; font-style: normal; }
+QTabWidget#tabWidget::pane, QWidget#scrollAreaWidgetContents { background: @surface; }
+QTabWidget#tabWidget::pane { border: 1px solid @edge; border-radius: 5px; }
+QTabWidget#tabWidget QTabBar::tab { background: transparent; color: @muted; padding: 7px 16px; border: 1px solid transparent; border-bottom-width: 2px; }
+QTabWidget#tabWidget QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; font-weight: bold; }
+QTabWidget#tabWidget QTabBar::tab:selected:focus { border-color: palette(highlight); }
+QTabWidget#tabWidget QTabBar::tab:hover { background: @wash; }
+QWidget#scrollAreaWidgetContents QLabel { color: @muted; font-size: @smallText; }
+QWidget#scrollAreaWidgetContents QLabel#issueHeading, QWidget#scrollAreaWidgetContents QLabel#publicationHeading,
+QWidget#scrollAreaWidgetContents QLabel#classificationHeading, QWidget#scrollAreaWidgetContents QLabel#alternateHeading {
+    font-size: @headingText; font-weight: bold; color: @ink; padding-top: 6px;
+}
+QWidget#scrollAreaWidgetContents QLineEdit, QWidget#scrollAreaWidgetContents QComboBox {
+    background: @surface; color: @ink; border: 1px solid @fieldBorder; border-radius: 4px; padding: 3px 6px; min-height: 17px;
+}
+QWidget#scrollAreaWidgetContents QComboBox { padding-right: 20px; }
+QWidget#scrollAreaWidgetContents QLineEdit:disabled, QWidget#scrollAreaWidgetContents QComboBox:disabled { background: @wash; color: @muted; }
+QWidget#scrollAreaWidgetContents QComboBox QLineEdit { border: 0; padding: 0; }
+QWidget#scrollAreaWidgetContents QLineEdit:focus, QWidget#scrollAreaWidgetContents QComboBox:focus { border-color: @accent; }
+QTableWidget#twList { background: @surface; border: 1px solid @edge; border-radius: 5px; color: @ink; selection-background-color: @accent; selection-color: @onAccent; }
+QTableWidget#twList::item { padding: 3px 8px; }
+QTableWidget#twList QHeaderView::section { background: @canvas; color: @ink; border: 0; border-bottom: 1px solid @edge; padding: 5px 8px; font-size: @smallText; font-weight: bold; }
+
+QLabel#tagSupportHint { color: @muted; font-size: @smallText; padding: 3px 0; }
+QWidget#coverImageContainer QPushButton { background: @surface; color: @accent; border: 1px solid @edge; border-radius: 4px; font-size: @headingText; }
+QWidget#coverImageContainer QPushButton:focus { border-color: palette(highlight); }
+QTabWidget#tabWidget::tab-bar { alignment: left; }
+QTabWidget#tabWidget QTabBar, QTabWidget#tabWidget QTabBar::tab { background: @canvas; }
+QTabWidget#tabWidget QTabBar::tab:selected { background: @surface; }
+QWidget#scrollAreaWidgetContents QComboBox::drop-down { border: 0; width: 23px; }
+QSplitter#splitter::handle { background: @canvas; }
+QSplitter#splitter::handle:hover { background: @edge; }
+QWidget#scrollAreaWidgetContents QComboBox::down-arrow { image: url("@chevron"); width: 12px; height: 8px; }
+
+QWidget#scrollAreaWidgetContents QCheckBox::indicator:unchecked {
+    width: 13px; height: 13px; background: @surface; border: 1px solid @muted; border-radius: 3px;
+}
+QWidget#scrollAreaWidgetContents QCheckBox::indicator:unchecked:disabled { background: @wash; border-color: @edge; }

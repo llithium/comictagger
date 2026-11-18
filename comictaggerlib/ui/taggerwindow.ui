@@ -45,92 +45,19 @@
       <property name="enabled">
        <bool>true</bool>
       </property>
-      <property name="styleSheet">
-       <string notr="true">QSplitter::handle:horizontal {
-background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #eee, stop:1 #ccc);
-border: 1px solid #777;
-width: 13px;
-margin-top: 2px;
-margin-bottom: 2px;
-border-radius: 4px;
-}
-</string>
-      </property>
-      <property name="orientation">
-       <enum>Qt::Horizontal</enum>
-      </property>
-      <property name="handleWidth">
-       <number>8</number>
-      </property>
       <widget class="QWidget" name="layoutWidget">
        <layout class="QHBoxLayout" name="horizontalLayout_2">
         <item>
          <layout class="QVBoxLayout" name="verticalLayout">
           <item>
-           <layout class="QFormLayout" name="style_layout">
-            <property name="fieldGrowthPolicy">
-             <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+           <widget class="QWidget" name="coverImageContainer" native="true">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
             </property>
-            <property name="labelAlignment">
-             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-            </property>
-            <property name="formAlignment">
-             <set>Qt::AlignHCenter|Qt::AlignTop</set>
-            </property>
-            <item row="0" column="0">
-             <widget class="QLabel" name="lbl_md_source">
-              <property name="text">
-               <string>Metadata
-Source</string>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-              </property>
-              <property name="buddy">
-               <cstring>cbx_sources</cstring>
-              </property>
-             </widget>
-            </item>
-            <item row="0" column="1">
-             <widget class="QComboBox" name="cbx_sources"/>
-            </item>
-            <item row="1" column="1">
-             <widget class="CheckableOrderComboBox" name="cbSelectedReadTags">
-              <property name="toolTip">
-               <string>At least one read style must be selected</string>
-              </property>
-             </widget>
-            </item>
-            <item row="2" column="1">
-             <widget class="CheckableComboBox" name="cbSelectedWriteTags"/>
-            </item>
-            <item row="1" column="0">
-             <widget class="QLabel" name="lbl_read_style">
-              <property name="text">
-               <string>Read Tags</string>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-              </property>
-              <property name="buddy">
-               <cstring>cbSelectedReadTags</cstring>
-              </property>
-             </widget>
-            </item>
-            <item row="2" column="0">
-             <widget class="QLabel" name="lbl_modify_style">
-              <property name="text">
-               <string>Write Tags</string>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-              </property>
-              <property name="buddy">
-               <cstring>cbSelectedWriteTags</cstring>
-              </property>
-             </widget>
-            </item>
-           </layout>
+           </widget>
           </item>
           <item>
            <widget class="QFrame" name="frameInfoBox">
@@ -139,21 +66,6 @@ Source</string>
               <horstretch>0</horstretch>
               <verstretch>0</verstretch>
              </sizepolicy>
-            </property>
-            <property name="minimumSize">
-             <size>
-              <width>230</width>
-              <height>0</height>
-             </size>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>230</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="frameShape">
-             <enum>QFrame::Panel</enum>
             </property>
             <property name="frameShadow">
              <enum>QFrame::Sunken</enum>
@@ -249,6 +161,9 @@ Source</string>
              </item>
              <item>
               <widget class="QLabel" name="lblTagList">
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
                  <horstretch>0</horstretch>
@@ -261,29 +176,75 @@ Source</string>
               </widget>
              </item>
             </layout>
+            <property name="frameShape">
+             <enum>QFrame::NoFrame</enum>
+            </property>
            </widget>
           </item>
           <item>
-           <widget class="QWidget" name="coverImageContainer" native="true">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
+           <layout class="QFormLayout" name="style_layout">
+            <property name="fieldGrowthPolicy">
+             <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
             </property>
-            <property name="minimumSize">
-             <size>
-              <width>230</width>
-              <height>380</height>
-             </size>
+            <property name="labelAlignment">
+             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
             </property>
-            <property name="maximumSize">
-             <size>
-              <width>230</width>
-              <height>380</height>
-             </size>
+            <property name="formAlignment">
+             <set>Qt::AlignHCenter|Qt::AlignTop</set>
             </property>
-           </widget>
+            <item row="0" column="0">
+             <widget class="QLabel" name="lbl_md_source">
+              <property name="alignment">
+               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+              </property>
+              <property name="buddy">
+               <cstring>cbx_sources</cstring>
+              </property>
+              <property name="text">
+               <string>Source</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QComboBox" name="cbx_sources"/>
+            </item>
+            <item row="1" column="1">
+             <widget class="CheckableOrderComboBox" name="cbSelectedReadTags">
+              <property name="toolTip">
+               <string>At least one read style must be selected</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="CheckableComboBox" name="cbSelectedWriteTags"/>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lbl_read_style">
+              <property name="alignment">
+               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+              </property>
+              <property name="buddy">
+               <cstring>cbSelectedReadTags</cstring>
+              </property>
+              <property name="text">
+               <string>Read tags</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="lbl_modify_style">
+              <property name="alignment">
+               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+              </property>
+              <property name="buddy">
+               <cstring>cbSelectedWriteTags</cstring>
+              </property>
+              <property name="text">
+               <string>Write tags</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
            <spacer name="verticalSpacer_2">
@@ -338,9 +299,6 @@ Source</string>
                 <property name="horizontalScrollBarPolicy">
                  <enum>Qt::ScrollBarAsNeeded</enum>
                 </property>
-                <property name="widgetResizable">
-                 <bool>false</bool>
-                </property>
                 <widget class="QWidget" name="scrollAreaWidgetContents">
                  <property name="enabled">
                   <bool>true</bool>
@@ -368,549 +326,532 @@ Source</string>
                  <property name="acceptDrops">
                   <bool>true</bool>
                  </property>
-                 <layout class="QGridLayout" name="gridLayout_6">
-                  <item row="0" column="0">
-                   <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="20,100">
-                    <item>
-                     <layout class="QFormLayout" name="formLayout_3">
-                      <property name="fieldGrowthPolicy">
-                       <enum>QFormLayout::FieldsStayAtSizeHint</enum>
-                      </property>
-                      <property name="rowWrapPolicy">
-                       <enum>QFormLayout::WrapAllRows</enum>
-                      </property>
-                      <property name="labelAlignment">
-                       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-                      </property>
-                      <property name="horizontalSpacing">
-                       <number>6</number>
-                      </property>
-                      <property name="verticalSpacing">
-                       <number>1</number>
-                      </property>
-                      <item row="0" column="0">
-                       <widget class="QLabel" name="label_4">
-                        <property name="text">
-                         <string>Issue</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leIssueNum</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="0" column="1">
-                       <widget class="QLineEdit" name="leIssueNum">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="1" column="0">
-                       <widget class="QLabel" name="label_6">
-                        <property name="text">
-                         <string>Year</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>lePubYear</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="1" column="1">
-                       <widget class="QLineEdit" name="lePubYear">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="maximumSize">
-                         <size>
-                          <width>16777215</width>
-                          <height>16777215</height>
-                         </size>
-                        </property>
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                        <property name="inputMethodHints">
-                         <set>Qt::ImhDigitsOnly</set>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="2" column="0">
-                       <widget class="QLabel" name="label_35">
-                        <property name="text">
-                         <string>Month</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>lePubMonth</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="2" column="1">
-                       <widget class="QLineEdit" name="lePubMonth">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="maximumSize">
-                         <size>
-                          <width>16777215</width>
-                          <height>16777215</height>
-                         </size>
-                        </property>
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                        <property name="inputMethodHints">
-                         <set>Qt::ImhDigitsOnly</set>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="3" column="0">
-                       <widget class="QLabel" name="lblDay">
-                        <property name="text">
-                         <string>Day</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>lePubDay</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="3" column="1">
-                       <widget class="QLineEdit" name="lePubDay">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="maximumSize">
-                         <size>
-                          <width>16777215</width>
-                          <height>16777215</height>
-                         </size>
-                        </property>
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                        <property name="inputMethodHints">
-                         <set>Qt::ImhDigitsOnly</set>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="4" column="0">
-                       <widget class="QLabel" name="label_5">
-                        <property name="text">
-                         <string># Issues</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leIssueCount</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="4" column="1">
-                       <widget class="QLineEdit" name="leIssueCount">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                        <property name="inputMethodHints">
-                         <set>Qt::ImhDigitsOnly</set>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="5" column="0">
-                       <widget class="QLabel" name="label_9">
-                        <property name="text">
-                         <string>Volume</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leVolumeNum</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="5" column="1">
-                       <widget class="QLineEdit" name="leVolumeNum">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="6" column="0">
-                       <widget class="QLabel" name="label_12">
-                        <property name="text">
-                         <string># Volumes</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leVolumeCount</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="6" column="1">
-                       <widget class="QLineEdit" name="leVolumeCount">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                        <property name="inputMethodHints">
-                         <set>Qt::ImhDigitsOnly</set>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="7" column="0">
-                       <widget class="QLabel" name="label_22">
-                        <property name="text">
-                         <string>Alt.Issue</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leAltIssueNum</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="7" column="1">
-                       <widget class="QLineEdit" name="leAltIssueNum">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="8" column="0">
-                       <widget class="QLabel" name="label_23">
-                        <property name="text">
-                         <string>Alt. # Issues</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leAltIssueCount</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="8" column="1">
-                       <widget class="QLineEdit" name="leAltIssueCount">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                     </layout>
-                    </item>
-                    <item>
-                     <layout class="QFormLayout" name="formLayout_2">
-                      <property name="sizeConstraint">
-                       <enum>QLayout::SetMinimumSize</enum>
-                      </property>
-                      <property name="fieldGrowthPolicy">
-                       <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-                      </property>
-                      <property name="rowWrapPolicy">
-                       <enum>QFormLayout::WrapAllRows</enum>
-                      </property>
-                      <property name="labelAlignment">
-                       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-                      </property>
-                      <property name="formAlignment">
-                       <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
-                      </property>
-                      <property name="horizontalSpacing">
-                       <number>0</number>
-                      </property>
-                      <property name="verticalSpacing">
-                       <number>1</number>
-                      </property>
-                      <item row="0" column="0">
-                       <widget class="QLabel" name="label_2">
-                        <property name="text">
-                         <string>Series</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leSeries</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="0" column="1">
-                       <widget class="QLineEdit" name="leSeries">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="1" column="0">
-                       <widget class="QLabel" name="label_3">
-                        <property name="text">
-                         <string>Title</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leTitle</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="1" column="1">
-                       <widget class="QLineEdit" name="leTitle">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="2" column="0">
-                       <widget class="QLabel" name="label_8">
-                        <property name="text">
-                         <string>Publisher</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>lePublisher</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="2" column="1">
-                       <widget class="QLineEdit" name="lePublisher">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="3" column="0">
-                       <widget class="QLabel" name="label_10">
-                        <property name="text">
-                         <string>Imprint</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leImprint</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="3" column="1">
-                       <widget class="QLineEdit" name="leImprint">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="4" column="0">
-                       <widget class="QLabel" name="label_33">
-                        <property name="text">
-                         <string>Series Group</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leSeriesGroup</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="4" column="1">
-                       <widget class="QLineEdit" name="leSeriesGroup">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="5" column="0">
-                       <widget class="QLabel" name="label_25">
-                        <property name="text">
-                         <string>Story Arc</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leStoryArc</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="5" column="1">
-                       <widget class="QLineEdit" name="leStoryArc">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="6" column="0">
-                       <widget class="QLabel" name="label_24">
-                        <property name="text">
-                         <string>Genre</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leGenre</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="6" column="1">
-                       <widget class="QLineEdit" name="leGenre">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="7" column="0">
-                       <widget class="QLabel" name="label_18">
-                        <property name="text">
-                         <string>Maturity Rating</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbMaturityRating</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="7" column="1">
-                       <widget class="QComboBox" name="cbMaturityRating">
-                        <property name="autoFillBackground">
-                         <bool>false</bool>
-                        </property>
-                        <property name="editable">
-                         <bool>true</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="8" column="0">
-                       <widget class="QLabel" name="label_31">
-                        <property name="text">
-                         <string>Manga</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbManga</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="8" column="1">
-                       <widget class="QComboBox" name="cbManga">
-                        <property name="autoFillBackground">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="9" column="0">
-                       <widget class="QLabel" name="label_26">
-                        <property name="text">
-                         <string>Format</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbFormat</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="9" column="1">
-                       <widget class="QComboBox" name="cbFormat">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                        <property name="editable">
-                         <bool>true</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="10" column="0">
-                       <widget class="QLabel" name="label_32">
-                        <property name="text">
-                         <string>Black &amp; White</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbBW</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="10" column="1">
-                       <widget class="QCheckBox" name="cbBW">
-                        <property name="layoutDirection">
-                         <enum>Qt::LeftToRight</enum>
-                        </property>
-                        <property name="autoFillBackground">
-                         <bool>false</bool>
-                        </property>
-                        <property name="text">
-                         <string/>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="11" column="0">
-                       <widget class="QLabel" name="label_13">
-                        <property name="text">
-                         <string>Language</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbLanguage</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="11" column="1">
-                       <widget class="QComboBox" name="cbLanguage">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="12" column="0">
-                       <widget class="QLabel" name="label_14">
-                        <property name="text">
-                         <string>Country</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>cbCountry</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="12" column="1">
-                       <widget class="QComboBox" name="cbCountry">
-                        <property name="sizePolicy">
-                         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-                          <horstretch>0</horstretch>
-                          <verstretch>0</verstretch>
-                         </sizepolicy>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="13" column="0">
-                       <widget class="QLabel" name="label_21">
-                        <property name="text">
-                         <string>Alt. Series</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leAltSeries</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="13" column="1">
-                       <widget class="QLineEdit" name="leAltSeries">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="14" column="0">
-                       <widget class="QLabel" name="label_34">
-                        <property name="text">
-                         <string>GTIN</string>
-                        </property>
-                        <property name="buddy">
-                         <cstring>leGtin</cstring>
-                        </property>
-                       </widget>
-                      </item>
-                      <item row="14" column="1">
-                       <widget class="QLineEdit" name="leGtin">
-                        <property name="acceptDrops">
-                         <bool>false</bool>
-                        </property>
-                       </widget>
-                      </item>
-                     </layout>
-                    </item>
-                   </layout>
+                 <layout class="QGridLayout" name="gridLayout_6" columnstretch="1,1,1,1,1,1">
+                  <item row="0" column="0" colspan="6">
+                   <widget class="QLabel" name="issueHeading">
+                    <property name="text">
+                     <string>Issue details</string>
+                    </property>
+                   </widget>
                   </item>
+                  <item row="1" column="0" colspan="3">
+                   <widget class="QLabel" name="label_2">
+                    <property name="text">
+                     <string>Series</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leSeries</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="2" column="0" colspan="3">
+                   <widget class="QLineEdit" name="leSeries">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="1" column="3" colspan="3">
+                   <widget class="QLabel" name="label_3">
+                    <property name="text">
+                     <string>Title</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leTitle</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="2" column="3" colspan="3">
+                   <widget class="QLineEdit" name="leTitle">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="0">
+                   <widget class="QLabel" name="label_4">
+                    <property name="text">
+                     <string>Issue</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leIssueNum</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="0">
+                   <widget class="QLineEdit" name="leIssueNum">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="1">
+                   <widget class="QLabel" name="label_5">
+                    <property name="buddy">
+                     <cstring>leIssueCount</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Issue count</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="1">
+                   <widget class="QLineEdit" name="leIssueCount">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                    <property name="inputMethodHints">
+                     <set>Qt::ImhDigitsOnly</set>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="2">
+                   <widget class="QLabel" name="label_9">
+                    <property name="text">
+                     <string>Volume</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leVolumeNum</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="2">
+                   <widget class="QLineEdit" name="leVolumeNum">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="3">
+                   <widget class="QLabel" name="label_12">
+                    <property name="buddy">
+                     <cstring>leVolumeCount</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Volume count</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="3">
+                   <widget class="QLineEdit" name="leVolumeCount">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                    <property name="inputMethodHints">
+                     <set>Qt::ImhDigitsOnly</set>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="4" colspan="2">
+                   <widget class="QLabel" name="label_26">
+                    <property name="text">
+                     <string>Format</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>cbFormat</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="4" colspan="2">
+                   <widget class="QComboBox" name="cbFormat">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="editable">
+                     <bool>true</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="5" column="0" colspan="6">
+                   <widget class="QLabel" name="publicationHeading">
+                    <property name="text">
+                     <string>Publication</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="6" column="0" colspan="2">
+                   <widget class="QLabel" name="label_8">
+                    <property name="text">
+                     <string>Publisher</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>lePublisher</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="7" column="0" colspan="2">
+                   <widget class="QLineEdit" name="lePublisher">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="6" column="2">
+                   <widget class="QLabel" name="label_10">
+                    <property name="text">
+                     <string>Imprint</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leImprint</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="7" column="2">
+                   <widget class="QLineEdit" name="leImprint">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="6" column="3">
+                   <widget class="QLabel" name="label_6">
+                    <property name="text">
+                     <string>Year</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>lePubYear</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="7" column="3">
+                   <widget class="QLineEdit" name="lePubYear">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                    <property name="inputMethodHints">
+                     <set>Qt::ImhDigitsOnly</set>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="6" column="4">
+                   <widget class="QLabel" name="label_35">
+                    <property name="text">
+                     <string>Month</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>lePubMonth</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="7" column="4">
+                   <widget class="QLineEdit" name="lePubMonth">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                    <property name="inputMethodHints">
+                     <set>Qt::ImhDigitsOnly</set>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="6" column="5">
+                   <widget class="QLabel" name="lblDay">
+                    <property name="text">
+                     <string>Day</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>lePubDay</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="7" column="5">
+                   <widget class="QLineEdit" name="lePubDay">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                    <property name="inputMethodHints">
+                     <set>Qt::ImhDigitsOnly</set>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="8" column="0" colspan="2">
+                   <widget class="QLabel" name="label_13">
+                    <property name="text">
+                     <string>Language</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>cbLanguage</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="9" column="0" colspan="2">
+                   <widget class="QComboBox" name="cbLanguage">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="8" column="2" colspan="2">
+                   <widget class="QLabel" name="label_14">
+                    <property name="text">
+                     <string>Country</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>cbCountry</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="9" column="2" colspan="2">
+                   <widget class="QComboBox" name="cbCountry">
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="8" column="4" colspan="2">
+                   <widget class="QLabel" name="label_34">
+                    <property name="text">
+                     <string>GTIN</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leGtin</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="9" column="4" colspan="2">
+                   <widget class="QLineEdit" name="leGtin">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="10" column="0" colspan="6">
+                   <widget class="QLabel" name="classificationHeading">
+                    <property name="text">
+                     <string>Classification</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="11" column="0" colspan="2">
+                   <widget class="QLabel" name="label_24">
+                    <property name="text">
+                     <string>Genre</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>leGenre</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="12" column="0" colspan="2">
+                   <widget class="QLineEdit" name="leGenre">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="11" column="2" colspan="2">
+                   <widget class="QLabel" name="label_33">
+                    <property name="buddy">
+                     <cstring>leSeriesGroup</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Series group</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="12" column="2" colspan="2">
+                   <widget class="QLineEdit" name="leSeriesGroup">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="11" column="4" colspan="2">
+                   <widget class="QLabel" name="label_25">
+                    <property name="buddy">
+                     <cstring>leStoryArc</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Story arc</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="12" column="4" colspan="2">
+                   <widget class="QLineEdit" name="leStoryArc">
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="13" column="0" colspan="2">
+                   <widget class="QLabel" name="label_18">
+                    <property name="buddy">
+                     <cstring>cbMaturityRating</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Maturity rating</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="14" column="0" colspan="2">
+                   <widget class="QComboBox" name="cbMaturityRating">
+                    <property name="autoFillBackground">
+                     <bool>false</bool>
+                    </property>
+                    <property name="editable">
+                     <bool>true</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="13" column="2" colspan="2">
+                   <widget class="QLabel" name="label_31">
+                    <property name="text">
+                     <string>Manga</string>
+                    </property>
+                    <property name="buddy">
+                     <cstring>cbManga</cstring>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="14" column="2" colspan="2">
+                   <widget class="QComboBox" name="cbManga">
+                    <property name="autoFillBackground">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="13" column="4" colspan="2">
+                   <widget class="QLabel" name="label_32">
+                    <property name="buddy">
+                     <cstring>cbBW</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Black &amp;&amp; white</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="14" column="4" colspan="2">
+                   <widget class="QCheckBox" name="cbBW">
+                    <property name="layoutDirection">
+                     <enum>Qt::LeftToRight</enum>
+                    </property>
+                    <property name="autoFillBackground">
+                     <bool>false</bool>
+                    </property>
+                    <property name="text">
+                     <string/>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="15" column="0" colspan="6">
+                   <widget class="QLabel" name="alternateHeading">
+                    <property name="text">
+                     <string>Alternate numbering</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="16" column="0" colspan="3">
+                   <widget class="QLabel" name="label_21">
+                    <property name="buddy">
+                     <cstring>leAltSeries</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Series</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="17" column="0" colspan="3">
+                   <widget class="QLineEdit" name="leAltSeries">
+                    <property name="accessibleName">
+                     <string>Alternate series</string>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="16" column="3">
+                   <widget class="QLabel" name="label_22">
+                    <property name="buddy">
+                     <cstring>leAltIssueNum</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Issue</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="17" column="3">
+                   <widget class="QLineEdit" name="leAltIssueNum">
+                    <property name="accessibleName">
+                     <string>Alternate issue</string>
+                    </property>
+                    <property name="sizePolicy">
+                     <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                      <horstretch>0</horstretch>
+                      <verstretch>0</verstretch>
+                     </sizepolicy>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="16" column="4" colspan="2">
+                   <widget class="QLabel" name="label_23">
+                    <property name="buddy">
+                     <cstring>leAltIssueCount</cstring>
+                    </property>
+                    <property name="text">
+                     <string>Issue count</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="17" column="4" colspan="2">
+                   <widget class="QLineEdit" name="leAltIssueCount">
+                    <property name="accessibleName">
+                     <string>Alternate issue count</string>
+                    </property>
+                    <property name="acceptDrops">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <property name="verticalSpacing">
+                   <number>4</number>
+                  </property>
+                  <property name="horizontalSpacing">
+                   <number>14</number>
+                  </property>
                  </layout>
                 </widget>
+                <property name="widgetResizable">
+                 <bool>true</bool>
+                </property>
+                <property name="frameShape">
+                 <enum>QFrame::NoFrame</enum>
+                </property>
                </widget>
               </item>
              </layout>
@@ -1405,6 +1346,12 @@ Source</string>
         <bool>false</bool>
        </property>
       </widget>
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="handleWidth">
+       <number>6</number>
+      </property>
      </widget>
     </item>
    </layout>
@@ -1505,16 +1452,12 @@ Source</string>
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="separator"/>
    <addaction name="actionLoad"/>
    <addaction name="actionLoadFolder"/>
    <addaction name="actionWrite_Tags"/>
    <addaction name="actionSearchOnline"/>
-   <addaction name="actionLiteralSearch"/>
    <addaction name="actionAutoTag"/>
    <addaction name="actionAutoIdentify"/>
-   <addaction name="actionAutoImprint"/>
-   <addaction name="actionClearEntryForm"/>
    <addaction name="actionPageBrowser"/>
   </widget>
   <action name="actionAbout">
@@ -1844,7 +1787,7 @@ Source</string>
      <normaloff>:/graphics/save.png</normaloff>:/graphics/save.png</iconset>
    </property>
    <property name="text">
-    <string>Save tag(s)</string>
+    <string>Save tags</string>
    </property>
    <property name="statusTip">
     <string>Write tag(s) to file</string>

@@ -23,8 +23,10 @@ import logging
 import operator
 import os
 import platform
+import queue
 import sys
 import textwrap
+import threading
 import traceback
 import webbrowser
 from collections.abc import Sequence
@@ -35,7 +37,6 @@ import settngs
 from PyQt6 import QtCore, QtGui, QtNetwork, QtWidgets, uic
 
 import comicapi.merge
-import comictaggerlib.ui
 from comicapi import utils
 from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
@@ -73,42 +74,38 @@ from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 logger = logging.getLogger(__name__)
 
 
-class QueryThread(QtCore.QThread):  # TODO: Evaluate thread semantics. Specifically with signals
-    finish = QtCore.pyqtSignal(GenericMetadata)
-    ratelimit = QtCore.pyqtSignal(float, float)
+class IssueLookup(threading.Thread):
+    """Run provider code independently of the lifetime of the Qt application."""
 
-    def __init__(
-        self,
-        talker: ComicTalker,
-        issue_id: str,
-        series_id: str,
-        issue_number: str,
-    ) -> None:
-        super().__init__()
+    def __init__(self, talker: ComicTalker, issue_id: str, series_id: str, issue_number: str) -> None:
+        super().__init__(daemon=True)
+        self.talker = talker
         self.issue_id = issue_id
         self.series_id = series_id
         self.issue_number = issue_number
-        self.talker = talker
+        self.messages: queue.SimpleQueue[GenericMetadata | Exception | tuple[float, float]] = queue.SimpleQueue()
 
     def run(self) -> None:
         try:
-            new_metadata = self.talker.fetch_comic_data(
+            metadata = self.talker.fetch_comic_data(
                 issue_id=self.issue_id,
                 series_id=self.series_id,
                 issue_number=self.issue_number,
-                on_rate_limit=RLCallBack(lambda x, y: self.ratelimit.emit(x, y), 60),
+                on_rate_limit=RLCallBack(lambda full, delay: self.messages.put((full, delay)), 60),
             )
-        except TalkerError as e:
-            OptionalMessageDialog.critical(None, f"{e.source} {e.code_name} Error", f"{e}")
-            return
-        self.finish.emit(new_metadata)
+            if not isinstance(metadata, GenericMetadata):
+                raise ValueError("The metadata source returned an invalid issue.")
+        except Exception as error:
+            logger.exception("Failed to fetch issue metadata")
+            self.messages.put(error)
+        else:
+            self.messages.put(metadata)
 
 
 class TaggerWindow(QtWidgets.QMainWindow):
     appName = "ComicTagger"
     version = ctversion.version
     ratelimit = QtCore.pyqtSignal(float, float)
-    query_finished = QtCore.pyqtSignal(GenericMetadata)
 
     def __init__(
         self,
@@ -179,9 +176,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
             "identifier": None,
             "last_mark": None,
         }
-        comictaggerlib.ui.qtutils.active_palette = self.leSeries.palette()
         self.config = config
         self.talkers = talkers
+        self.selector: SeriesSelectionWindow | None = None
+        self._issue_lookup: IssueLookup | None = None
+        self._lookup_timer = QtCore.QTimer(self)
+        self._lookup_timer.setInterval(50)
+        self._lookup_timer.timeout.connect(self._poll_issue_lookup)
         self.log_window = self.setup_logger()
 
         self.archiveCoverWidget = CoverImageWidget(self.coverImageContainer, CoverImageWidget.ArchiveMode, None)
@@ -205,23 +206,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.socket_server = socket_server
         self.socket_server.newConnection.connect(self.on_incoming_socket_connection)
 
-        # we can't specify relative font sizes in the UI designer, so
-        # walk through all the labels in the main form, and make them
-        # a smidge smaller TODO: there has to be a better way to do this
-        try:
-            for child in self.scrollAreaWidgetContents.children():
-                if isinstance(child, QtWidgets.QLabel):
-                    f = child.font()
-                    if f.pointSize() > 10:
-                        f.setPointSize(f.pointSize() - 2)
-                    f.setItalic(True)
-                    child.setFont(f)
-            self.scrollAreaWidgetContents.adjustSize()
-        except Exception:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            trace_back = "".join(traceback.format_tb(exc_traceback))
-            logger.exception("Failed to adjust sizes")
-            OptionalMessageDialog.critical(self, "Failed to adjust sizes", "", trace_back)
+        self.configure_workspace()
 
         try:
             self.qicon = QtGui.QIcon(str(graphics_path / "app.png"))
@@ -317,20 +302,16 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.page_list_editor.firstFrontCoverChanged.connect(self.front_cover_changed)
         self.page_list_editor.listOrderChanged.connect(self.page_list_order_changed)
         self.page_list_editor.archiveChanged.connect(self.update_info_box)
-        self.tabWidget.currentChanged.connect(self.tab_changed)
         self.leGtin.textChanged.connect(self.gtin_changed)
 
         self.page_list_editor.set_blur(self.config[0].General__blur)
 
         self.ratelimit.connect(self.on_ratelimit)
-        self.query_finished.connect(self.apply_query_metadata)
 
         def _sync_blur(*args: Any) -> None:
             self.config[0].General__blur = self.page_list_editor.blur
 
         self.page_list_editor.cbxBlur.clicked.connect(_sync_blur)
-
-        self.splitter.splitterMoved.connect(self.splitter_moved_event)
 
         self.fileSelectionList.add_app_action(self.actionAutoIdentify)
         self.fileSelectionList.add_app_action(self.actionAutoTag)
@@ -364,11 +345,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Failed to load comics", "", trace_back)
 
         self.set_app_position()
-        if self.config[0].internal__form_width != -1:
-            self.splitter.setSizes([self.config[0].internal__form_width, self.config[0].internal__list_width])
+        list_height = self.config[0].internal__archive_list_height
+        self.splitter.setSizes([max(1, self.splitter.height() - list_height), list_height])
         self.raise_()
         QtCore.QCoreApplication.processEvents()
-        self.resizeEvent(None)
 
         if self.config[0].Dialog_Flags__show_disclaimer:
 
@@ -438,6 +418,122 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self, "Failed to check for new version", "Failed to check for new version", trace_back
             )
 
+    def configure_workspace(self) -> None:
+        self.coverImageContainer.setFixedWidth(216)
+        self.coverImageContainer.setMinimumHeight(116)
+        self.coverImageContainer.setMaximumHeight(288)
+        self.frameInfoBox.setFixedWidth(216)
+        self.verticalLayout.setStretch(0, 1)
+        self.verticalLayout.setSpacing(8)
+        self.tagSupportHint = QtWidgets.QLabel("Shaded fields are unavailable for the selected write tags.")
+        self.tagSupportHint.setObjectName("tagSupportHint")
+        self.tagSupportHint.setFixedWidth(216)
+        self.tagSupportHint.setWordWrap(True)
+        self.verticalLayout.insertWidget(3, self.tagSupportHint)
+        self.horizontalLayout_2.setContentsMargins(6, 0, 6, 4)
+        self.horizontalLayout_2.setSpacing(18)
+        self.gridLayout_5.setContentsMargins(5, 2, 5, 4)
+        self.gridLayout.setContentsMargins(18, 12, 18, 8)
+        self.gridLayout_6.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+        for combo in (self.cbLanguage, self.cbCountry):
+            combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.currentTextChanged.connect(combo.setToolTip)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.widgetListHolder.layout().setContentsMargins(0, 0, 0, 0)
+        self.fileSelectionList.layout().setContentsMargins(0, 0, 0, 0)
+        self.tabWidget.tabBar().setDrawBase(False)
+        self.tabWidget.tabBar().setExpanding(False)
+        for button, text, name in (
+            (self.archiveCoverWidget.btnLeft, "‹", "Previous page"),
+            (self.archiveCoverWidget.btnRight, "›", "Next page"),
+        ):
+            button.setFixedWidth(30)
+            button.setIcon(QtGui.QIcon())
+            button.setText(text)
+            button.setAccessibleName(name)
+            button.setToolTip(name)
+        self.toolBar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.toolBar.widgetForAction(self.actionWrite_Tags).setObjectName("saveTags")
+        self.toolBar.insertSeparator(self.actionSearchOnline)
+        self.toolBar.insertSeparator(self.actionPageBrowser)
+        for action in self.toolBar.actions():
+            button = self.toolBar.widgetForAction(action)
+            if isinstance(button, QtWidgets.QToolButton):
+                button.setFocusPolicy(QtCore.Qt.FocusPolicy.TabFocus)
+
+        self.welcome = QtWidgets.QWidget(self.centralWidget)
+        self.welcome.setObjectName("welcome")
+        welcome_layout = QtWidgets.QVBoxLayout(self.welcome)
+        welcome_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.setSpacing(12)
+        mark = QtWidgets.QLabel()
+        mark.setPixmap(QtGui.QIcon(str(graphics_path / "app.png")).pixmap(72, 72))
+        title = QtWidgets.QLabel("Open a comic archive")
+        title.setObjectName("welcomeTitle")
+        description = QtWidgets.QLabel("Drop comic files or a folder here to view and edit their metadata.")
+        for widget in (mark, title, description):
+            welcome_layout.addWidget(widget, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        for text, action in (("Open archive", self.actionLoad), ("Open folder", self.actionLoadFolder)):
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(action.trigger)
+            buttons.addWidget(button)
+            if action == self.actionLoad:
+                button.setObjectName("openArchive")
+        welcome_layout.addLayout(buttons)
+        blank = QtWidgets.QPushButton("Edit blank metadata")
+        blank.setObjectName("blankEditor")
+        blank.clicked.connect(self.show_editor)
+        welcome_layout.addWidget(blank, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.gridLayout.addWidget(self.welcome, 0, 0)
+        self.apply_workspace_style()
+
+    def show_editor(self) -> None:
+        entering_editor = not self.welcome.isHidden()
+        self.toolBar.show()
+        self.welcome.hide()
+        self.splitter.show()
+        if entering_editor:
+            self.tabWidget.setCurrentWidget(self.tab)
+            self.leSeries.setFocus()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange and hasattr(self, "welcome"):
+            self.apply_workspace_style()
+            if self.twCredits.rowCount():
+                self.update_credit_colors()
+        elif event.type() == QtCore.QEvent.Type.FontChange and hasattr(self, "welcome"):
+            self.apply_workspace_style()
+
+    def apply_workspace_style(self) -> None:
+        dark = self.palette().window().color().lightness() < 128
+        colors = {
+            "canvas": "#1e2326" if dark else "#f2f4f3",
+            "surface": "#282e30" if dark else "#ffffff",
+            "ink": "#f0f4f1" if dark else "#1d302d",
+            "muted": "#bdcbc6" if dark else "#4b615b",
+            "edge": "#58645f" if dark else "#c9d3cf",
+            "accent": "#a6dfcb" if dark else "#175b49",
+            "onAccent": "#112b22" if dark else "#ffffff",
+            "fieldBorder": "#899a92" if dark else "#7a8b83",
+            "wash": "#343e3b" if dark else "#e9efec",
+        }
+        with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
+            style = sheet.read()
+        font_size = self.fontInfo().pixelSize()
+        for name, scale in (("bodyText", 1.0), ("smallText", 0.92), ("headingText", 1.23), ("welcomeText", 2.15)):
+            style = style.replace("@" + name, f"{round(font_size * scale)}px")
+        style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
+        for role, color in colors.items():
+            style = style.replace("@" + role, color)
+        self.centralWidget.setStyleSheet(style)
+        self.toolBar.setStyleSheet(style)
+        self.fileSelectionList.update_minimum_height()
+
     def enabled_tags(self) -> Sequence[str]:
         return [tag.id for tag in tags.values() if tag.enabled]
 
@@ -483,6 +579,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         return qapplogwindow
 
     def reset_app(self) -> None:
+        if self.splitter.isVisible():
+            self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
         self.archiveCoverWidget.clear()
         self.comic_archive = None
         self.dirty_flag = False
@@ -494,6 +592,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_menus()
         self.update_info_box()
 
+        self.splitter.hide()
+        self.welcome.show()
+        self.toolBar.hide()
         self.droppedFile = None
         self.page_loader = None
 
@@ -588,8 +689,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.leWebLink.editItem(self.leWebLink.item(self.leWebLink.count() - 1))
 
     def remove_weblink_item(self) -> None:
-        item = self.leWebLink.takeItem(self.leWebLink.currentRow())
-        del item
+        if self.leWebLink.takeItem(self.leWebLink.currentRow()) is not None:
+            self.set_dirty_flag()
 
     def repackage_archive(self) -> None:
         ca_list = self.fileSelectionList.get_selected_archive_list()
@@ -772,6 +873,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def update_menus(self) -> None:
         enabled = self.comic_archive is not None
         writeable = self.comic_archive is not None and self.comic_archive.is_writable()
+        self.actionWrite_Tags.setEnabled(enabled)
         self.actionApplyCBLTransform.setEnabled(enabled)
         self.actionAutoIdentify.setEnabled(enabled)
         self.actionAutoTag.setEnabled(enabled)
@@ -790,30 +892,16 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.view_tag_actions[tag_id].setEnabled(tags[tag_id].enabled and self.comic_archive.has_tags(tag_id))
                 self.remove_tag_actions[tag_id].setEnabled(tags[tag_id].enabled and self.comic_archive.has_tags(tag_id))
 
-            if writeable:
-                self.actionWrite_Tags
-                self.actionWrite_Tags.triggered.disconnect()
-                self.actionWrite_Tags.triggered.connect(self.prompt_write_tags)
-                self.actionWrite_Tags.setToolTip("")
-                self.actionWrite_Tags.setStatusTip("")
-            else:
-                self.actionWrite_Tags.triggered.disconnect()
-                self.actionWrite_Tags.triggered.connect(
-                    functools.partial(
-                        self._toast,
-                        "Unable to write Tags",
-                        f"Archive is not writeable\n{self.comic_archive.path}",
-                        5000,
-                    )
-                )
-                self.actionWrite_Tags.setToolTip("Archive is not writeable")
-                self.actionWrite_Tags.setStatusTip("Archive is not writeable")
+        save_hint = "Archive is not writeable" if enabled and not writeable else ""
+        self.actionWrite_Tags.setToolTip(save_hint)
+        self.actionWrite_Tags.setStatusTip(save_hint)
 
     def update_info_box(self) -> None:
         ca = self.comic_archive
 
         if ca is None:
-            self.lblFilename.setText("")
+            self.lblFilename.setText("No archive selected")
+            self.lblFilename.setToolTip("")
             self.lblArchiveType.setText("")
             self.lblTagList.setText("")
             self.lblPageCount.setText("")
@@ -823,20 +911,19 @@ class TaggerWindow(QtWidgets.QMainWindow):
         filename = os.path.splitext(filename)[0]
         filename = FileNameParser().fix_spaces(filename, False)
 
-        self.lblFilename.setText(filename)
+        if not self.welcome.isHidden():
+            self.show_editor()
+        self.lblFilename.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.lblFilename.setText(self.metadata.title or filename)
+        self.lblFilename.setToolTip(filename)
 
         self.lblArchiveType.setText(ca.archiver.name() + " archive")
 
-        page_count = f" ({ca.get_number_of_pages()} pages)"
+        page_count = f"·  {ca.get_number_of_pages()} pages"
         self.lblPageCount.setText(page_count)
 
-        supported_md = ca.get_supported_tags()
-        tag_info = ""
-        for md in supported_md:
-            if ca.has_tags(md):
-                tag_info += "• " + tags[md].name() + "\n"
-
-        self.lblTagList.setText(tag_info)
+        tag_list = ", ".join(tags[tag].name() for tag in ca.get_supported_tags() if ca.has_tags(tag))
+        self.lblTagList.setText(f"Tags: {tag_list}" if tag_list else "")
 
     def set_dirty_flag(self) -> None:
         if not self.dirty_flag:
@@ -861,6 +948,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             widget.textChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QComboBox):
             widget.currentIndexChanged.connect(self.set_dirty_flag)
+        if isinstance(widget, QtWidgets.QDoubleSpinBox):
+            widget.valueChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QCheckBox):
             widget.stateChanged.connect(self.set_dirty_flag)
         if isinstance(widget, QtWidgets.QListWidget):
@@ -872,6 +961,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.connect_child_dirty_flag_signals(child)
 
     def clear_form(self) -> None:
+        self._forget_issue_lookup()
+        self.selector = None
         # get a minty fresh metadata object
         self.metadata = GenericMetadata()
 
@@ -1063,9 +1154,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         md.notes = utils.xlate(self.teNotes.toPlainText())
         md.maturity_rating = utils.xlate(self.cbMaturityRating.currentText())
 
-        md.critical_rating = utils.xlate_float(self.dsbCriticalRating.cleanText())
-        if md.critical_rating == 0.0:
-            md.critical_rating = None
+        md.critical_rating = self.dsbCriticalRating.value() or None
 
         md.story_arcs = utils.split(self.leStoryArc.text(), ",")
         md.scan_info = utils.xlate(self.leScanInfo.text())
@@ -1192,7 +1281,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         issue_count = utils.xlate_int(self.leIssueCount.text())
 
-        self.selector = SeriesSelectionWindow(
+        selector = SeriesSelectionWindow(
             self,
             self.config[0],
             self.current_talker(),
@@ -1204,30 +1293,49 @@ class TaggerWindow(QtWidgets.QMainWindow):
             autoselect,
             literal,
         )
-        self.selector.ratelimit.connect(self.on_ratelimit)
+        self._forget_issue_lookup()
+        self.selector = selector
+        selector.ratelimit.connect(self.on_ratelimit)
+        selector.setWindowTitle(f"Search: '{series_name}' - Select Series")
+        selector.accepted.connect(functools.partial(self.finish_query, selector))
+        selector.perform_query()
 
-        self.selector.setWindowTitle(f"Search: '{series_name}' - Select Series")
-        self.selector.finished.connect(self.finish_query)
-
-        self.selector.perform_query()
-
-    def finish_query(self, result: list[GenericMetadata]) -> None:
-        if not (result and self.selector):
+    def finish_query(self, selector: SeriesSelectionWindow) -> None:
+        if self.selector is not selector:
             return
 
-        self.querythread = QueryThread(
-            self.current_talker(),
-            self.selector.issue_id,
-            self.selector.series_id,
-            self.selector.issue_number,
-        )
-        self.querythread.finish.connect(self.query_finished)
-        self.querythread.ratelimit.connect(self.ratelimit)
-        self.querythread.start()
+        self._issue_lookup = IssueLookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
+        self._issue_lookup.start()
+        self._lookup_timer.start()
+
+    def _forget_issue_lookup(self) -> None:
+        self._lookup_timer.stop()
+        self._issue_lookup = None
+
+    def _poll_issue_lookup(self) -> None:
+        lookup = self._issue_lookup
+        while lookup is not None and lookup is self._issue_lookup:
+            try:
+                message = lookup.messages.get_nowait()
+            except queue.Empty:
+                return
+
+            if isinstance(message, tuple):
+                self.on_ratelimit(*message)
+                continue
+
+            self._forget_issue_lookup()
+            if isinstance(message, Exception):
+                title = (
+                    f"{message.source} {message.code_name} Error"
+                    if isinstance(message, TalkerError)
+                    else "Search failed"
+                )
+                OptionalMessageDialog.critical(self, title, str(message))
+            else:
+                self.apply_query_metadata(message)
 
     def apply_query_metadata(self, new_metadata: GenericMetadata) -> None:
-        QtWidgets.QApplication.restoreOverrideCursor()
-
         # copy the form onto metadata object
         self.form_to_metadata()
 
@@ -1240,6 +1348,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.metadata = prepare_metadata(self.metadata, new_metadata, self.config[0])
         # Now push the new combined data into the edit controls
         self.metadata_to_form()
+        self.set_dirty_flag()
 
     def on_ratelimit(self, full_time: float, sleep_time: float) -> None:
         self._toast(
@@ -1288,8 +1397,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self._toast("Unable to write Tags", f"Archive is not writeable\n{self.comic_archive.path}", 5000)
             return
 
-        if not self.config[0].General__prompt_on_save:
-            return self.write_tags()
+        if not self.config[0].Runtime_Options__tags_write or not self.config[0].General__prompt_on_save:
+            self.write_tags()
+            return
 
         qmsg = OptionalMessageDialog.msg(
             parent=self,
@@ -1297,48 +1407,63 @@ class TaggerWindow(QtWidgets.QMainWindow):
             msg=f"Are you sure you wish to save {', '.join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])} tags to this archive?",
             icon=OptionalMessageDialog.Icon.Question,
         )
-        qmsg.accepted.connect(self.write_tags)
+        archive = self.comic_archive
+
+        def save_confirmed_archive() -> None:
+            if self.comic_archive is archive:
+                self.write_tags()
+
+        qmsg.accepted.connect(save_confirmed_archive)
         qmsg.check_status.connect(self._update_prompt_on_save)
 
     def _update_prompt_on_save(self, check: bool) -> None:
         self.config[0].General__prompt_on_save = not check
 
-    def write_tags(self) -> None:
+    def write_tags(self) -> bool:
+        if self.comic_archive is None:
+            return False
+        write_tag_ids = self.config[0].Runtime_Options__tags_write
+        if not write_tag_ids:
+            OptionalMessageDialog.warning(self, "Save failed", "Select at least one tag format to write.")
+            return False
+        save_error = None
+        reloaded_metadata = self.metadata
         QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
         try:
             self.form_to_metadata()
-            assert self.comic_archive
-            _, failed_tag = write_selected_tags(
-                self.comic_archive, self.metadata, self.config[0].Runtime_Options__tags_write
-            )
-            self.comic_archive.load_cache(set(tags))
+            _, failed_tag = write_selected_tags(self.comic_archive, self.metadata, write_tag_ids)
+            if failed_tag is not None:
+                save_error = f"The tag save operation seemed to fail for: {tags[failed_tag].name()}"
+            else:
+                self.comic_archive.load_cache(set(tags))
+                reloaded_metadata, _, error = read_configured_tags(
+                    self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
+                )
+                if error is not None:
+                    logger.error("Failed to reload tags from %s: %s", self.comic_archive.path, error, exc_info=error)
+                    save_error = "The tags were written, but the selected read tags could not be reloaded."
+        except Exception as write_error:
+            logger.exception("Failed to save metadata")
+            save_error = str(write_error)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
-        if failed_tag:
-            OptionalMessageDialog.warning(
-                self,
-                "Save failed",
-                f"The tag save operation seemed to fail for: {tags[failed_tag].name()}",
-            )
-        else:
-            self.clear_dirty_flag()
-            self.update_info_box()
-            self.update_menus()
+        row, _ = self.fileSelectionList.get_current_list_row(str(self.comic_archive.path))
+        if save_error is not None:
+            # Earlier formats may already be on disk. Keep the editor intact for retry.
+            try:
+                self.fileSelectionList.update_row(row)
+                self.update_info_box()
+                self.update_menus()
+            except Exception:
+                logger.exception("Failed to refresh archive status after a save error")
+            OptionalMessageDialog.warning(self, "Save failed", save_error)
+            return False
 
-            self.metadata, _, error = read_configured_tags(
-                self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]
-            )
-            if error is not None:
-                logger.error("Failed to load metadata for %s: %s", self.comic_archive.path, error)
-                OptionalMessageDialog.warning(
-                    self,
-                    "Read Failed!",
-                    f"One or more of the selected read tags failed to load for {self.comic_archive.path}, check log for details",
-                )
-
-        self.fileSelectionList.update_current_row()
+        self.metadata = reloaded_metadata
+        self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
+        return True
 
     def select_read_tags(self, tag_ids: list[str]) -> None:
         """Should only be called from the combobox signal"""
@@ -1380,7 +1505,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 widget = self.twCredits.item(r, credit[1])
                 if credit[0] == "credits.role":
                     widget_enabled = widget_enabled and supports_role
-                enable_widget(widget, widget_enabled)
+                widget.setBackground(QtGui.QBrush() if widget_enabled else self.palette().window())
 
     def update_tag_tweaks(self) -> None:
         # depending on the current data tag, certain fields are disabled
@@ -1394,6 +1519,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if widget is not None and not isinstance(widget, (int)):
                 enable_widget(widget, md_field in enabled_widgets)
 
+        self.tagSupportHint.setVisible(
+            any(not field.isEnabled() for field in self.scrollAreaWidgetContents.findChildren(QtWidgets.QLineEdit))
+        )
         self.update_credit_colors()
         self.page_list_editor.select_write_tags(self.config[0].Runtime_Options__tags_write)
         self.toggle_enable_embedding_hashes()
@@ -1430,7 +1558,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         # otherwise, we need to check for, and clear, other primaries with same role
         role = str(self.twCredits.item(row, self.md_attributes["credits.role"]).text())
-        r = 0
         for r in range(self.twCredits.rowCount()):
             if (
                 self.twCredits.item(r, self.md_attributes["credits.primary"]).text() != ""
@@ -1442,85 +1569,82 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.twCredits.item(row, self.md_attributes["credits.primary"]).setText("Yes")
 
     def _update_credit(self, credit: Credit, row: int) -> None:
-        assert isinstance(row, int)
-        lang = utils.get_language_from_iso(credit.language) or credit.language
-        self.twCredits.item(row, self.md_attributes["credits.role"]).setText(credit.role)
-        self.twCredits.item(row, self.md_attributes["credits.person"]).setText(credit.person)
-        self.twCredits.item(row, self.md_attributes["credits.language"]).setText(lang)
-        self.twCredits.item(row, self.md_attributes["credits.language"]).setData(
-            QtCore.Qt.ItemDataRole.UserRole, credit.language
-        )
-        self.update_credit_primary_flag(row, credit.primary)
+        # Keep the row in place until all cells and the primary flags are updated.
+        sorting = self.twCredits.isSortingEnabled()
+        self.twCredits.setSortingEnabled(False)
+        try:
+            language = utils.get_language_from_iso(credit.language) or credit.language
+            for attribute, text, tooltip in (
+                ("credits.role", credit.role, credit.role),
+                ("credits.person", credit.person, credit.person),
+                ("credits.language", language, credit.language),
+            ):
+                item = self.twCredits.item(row, self.md_attributes[attribute])
+                item.setText(text)
+                item.setToolTip(tooltip)
+            self.twCredits.item(row, self.md_attributes["credits.language"]).setData(
+                QtCore.Qt.ItemDataRole.UserRole, credit.language
+            )
+            self.update_credit_primary_flag(row, credit.primary)
+        finally:
+            self.twCredits.setSortingEnabled(sorting)
 
         self.update_credit_colors()
         self.set_dirty_flag()
 
     def _add_credit(self, credit: Credit) -> None:
-        # add new entry
-        row = self.twCredits.rowCount()
-        self.add_new_credit_entry(row, credit)
+        sorting = self.twCredits.isSortingEnabled()
+        self.twCredits.setSortingEnabled(False)
+        try:
+            self.add_new_credit_entry(self.twCredits.rowCount(), credit)
+        finally:
+            self.twCredits.setSortingEnabled(sorting)
 
         self.update_credit_colors()
         self.set_dirty_flag()
 
-    def _credit_changed(self, credit: Credit, row: int) -> None:
+    def _credit_changed(self, credit: Credit, row: int | None) -> None:
         dupe_index = self.get_dupe_credit(row, credit.role, credit.person)
         if dupe_index < 0:
-            return self._update_credit(credit, row)
-        # delete the dupe credit from list
-        qmsg = QtWidgets.QMessageBox(parent=self)
-        qmsg.addAction(self.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(qmsg.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-        qmsg.setText("Duplicate Credit!")
-        qmsg.setInformativeText(
-            "This will create a duplicate credit entry. Would you like to merge the entries, or create a duplicate?"
-        )
-        qmsg.addButton("Merge", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-        qmsg.addButton("Duplicate", QtWidgets.QMessageBox.ButtonRole.ActionRole)
-
-        def _merge(credit: Credit, row: int, existing: int) -> None:
-            self.twCredits.removeRow(row)
-            self._update_credit(credit, existing)
-
-        qmsg.accepted.connect(functools.partial(_merge, credit, row, dupe_index))
-        qmsg.finished.connect(functools.partial(self._credit_finished, credit=credit, row=row))
-
-        qmsg.show()
-
-    def _credit_finished(self, code: int, *, credit: Credit, row: int) -> None:
-        if code in (QtWidgets.QDialog.DialogCode.Rejected, QtWidgets.QDialog.DialogCode.Accepted):
+            if row is None:
+                self._add_credit(credit)
+            else:
+                self._update_credit(credit, row)
             return
-        self._update_credit(credit, row)
+
+        dialog = QtWidgets.QMessageBox(parent=self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.setText("Duplicate credit")
+        dialog.setInformativeText("Would you like to merge the entries or keep both credits?")
+        merge = dialog.addButton("Merge", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        duplicate = dialog.addButton("Duplicate", QtWidgets.QMessageBox.ButtonRole.ActionRole)
+        cancel = dialog.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+
+        model = self.twCredits.model()
+        existing = QtCore.QPersistentModelIndex(model.index(dupe_index, 0))
+        edited = QtCore.QPersistentModelIndex(model.index(row, 0)) if row is not None else None
+
+        def apply_choice(_result: int) -> None:
+            if not existing.isValid() or (edited is not None and not edited.isValid()):
+                return
+            clicked = dialog.clickedButton()
+            if clicked is merge:
+                if edited is not None:
+                    self.twCredits.removeRow(edited.row())
+                self._update_credit(credit, existing.row())
+            elif clicked is duplicate:
+                if edited is None:
+                    self._add_credit(credit)
+                else:
+                    self._update_credit(credit, edited.row())
+
+        dialog.finished.connect(apply_choice)
+        dialog.open()
 
     def _credit_added(self, credit: Credit) -> None:
-        dupe_index = self.get_dupe_credit(None, credit.role, credit.person)
-        if dupe_index < 0:
-            self._add_credit(credit)
-            return
-        # delete the dupe credit from list
-        qmsg = QtWidgets.QMessageBox(parent=self)
-        qmsg.addAction(self.actionExit)
-        # Qt sucks
-        cancel = QtGui.QAction(self)
-        cancel.triggered.connect(qmsg.reject)
-        cancel.setShortcut(QtGui.QKeySequence.StandardKey.Cancel)
-        qmsg.setText("Duplicate Credit!")
-        qmsg.setInformativeText(
-            "This will create a duplicate credit entry. Would you like to merge the entries, or create a duplicate?"
-        )
-        qmsg.addButton("Merge", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
-        qmsg.addButton("Duplicate", QtWidgets.QMessageBox.ButtonRole.ActionRole)
-        qmsg.accepted.connect(functools.partial(self._update_credit, credit, dupe_index))
-        qmsg.finished.connect(functools.partial(self._credit_added_finished, credit=credit))
-        qmsg.show()
-
-    def _credit_added_finished(self, code: int, *, credit: Credit) -> None:
-        if code in (QtWidgets.QDialog.DialogCode.Rejected, QtWidgets.QDialog.DialogCode.Accepted):
-            return
-        self._add_credit(credit)
+        self._credit_changed(credit, None)
 
     def remove_credit(self) -> None:
         row = self.twCredits.currentRow()
@@ -2061,36 +2185,38 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def dirty_flag_verification(self, title: str, desc: str) -> bool:
         if not self.dirty_flag:
             return True
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            title,
-            desc,
-            (
-                QtWidgets.QMessageBox.StandardButton.Save
-                | QtWidgets.QMessageBox.StandardButton.Cancel
-                | QtWidgets.QMessageBox.StandardButton.Discard
-            ),
-            QtWidgets.QMessageBox.StandardButton.Cancel,
-        )
+        with self.fileSelectionList.defer_path_loads():
+            buttons = QtWidgets.QMessageBox.StandardButton.Cancel | QtWidgets.QMessageBox.StandardButton.Discard
+            if self.comic_archive is not None and self.comic_archive.is_writable():
+                buttons |= QtWidgets.QMessageBox.StandardButton.Save
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                title,
+                desc,
+                buttons,
+                QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
 
-        if reply == QtWidgets.QMessageBox.StandardButton.Discard:
-            return True
-        if reply == QtWidgets.QMessageBox.StandardButton.Save:
-            self.prompt_write_tags()
-            return True
-        return False
+            if reply == QtWidgets.QMessageBox.StandardButton.Discard:
+                return True
+            if reply == QtWidgets.QMessageBox.StandardButton.Save:
+                return self.write_tags()
+            return False
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._lookup_timer.stop()
         if self.dirty_flag_verification(
             f"Exit {self.appName}", "If you quit now, data in the form will be lost.  Are you sure?"
         ):
+            self._forget_issue_lookup()
+            self.selector = None
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()
             self.config[0].internal__window_height = appsize.height()
             self.config[0].internal__window_x = self.x()
             self.config[0].internal__window_y = self.y()
-            self.config[0].internal__form_width = self.splitter.sizes()[0]
-            self.config[0].internal__list_width = self.splitter.sizes()[1]
+            if self.splitter.isVisible():
+                self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
             (
                 self.config[0].internal__sort_column,
                 self.config[0].internal__sort_direction,
@@ -2101,6 +2227,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
             event.accept()
         else:
+            if self._issue_lookup is not None:
+                self._lookup_timer.start()
             event.ignore()
 
     def show_page_browser(self) -> None:
@@ -2217,21 +2345,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def file_list_cleared(self) -> None:
         self.reset_app()
-
-    def splitter_moved_event(self, w1: int, w2: int) -> None:
-        scrollbar_w = 0
-        if self.scrollArea.verticalScrollBar().isVisible():
-            scrollbar_w = self.scrollArea.verticalScrollBar().width()
-
-        new_w = self.scrollArea.width() - scrollbar_w - 5
-        self.scrollAreaWidgetContents.resize(new_w, self.scrollAreaWidgetContents.height())
-
-    def resizeEvent(self, ev: QtGui.QResizeEvent | None) -> None:
-        self.splitter_moved_event(0, 0)
-
-    def tab_changed(self, idx: int) -> None:
-        if idx == 0:
-            self.splitter_moved_event(0, 0)
 
     def gtin_changed(self) -> None:
         # GTIN changed, so we check if it's valid

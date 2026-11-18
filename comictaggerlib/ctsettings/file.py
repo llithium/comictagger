@@ -34,6 +34,7 @@ def internal(parser: settngs.Manager, default_tag: str) -> None:
     parser.add_setting("window_height", default=0, cmdline=False)
     parser.add_setting("window_x", default=0, cmdline=False)
     parser.add_setting("window_y", default=0, cmdline=False)
+    parser.add_setting("archive_list_height", default=78, cmdline=False)
     parser.add_setting("form_width", default=-1, cmdline=False)
     parser.add_setting("list_width", default=-1, cmdline=False)
     parser.add_setting("sort_column", default=-1, cmdline=False)
