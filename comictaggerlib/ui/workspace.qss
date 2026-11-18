@@ -9,14 +9,15 @@ QWidget#welcome { background: @surface; border: 1px solid @edge; border-radius: 
 QWidget#welcome QLabel { color: @muted; }
 QWidget#welcome QLabel#welcomeTitle { color: @ink; font-size: @welcomeText; font-weight: bold; }
 QWidget#welcome QPushButton { background: @canvas; border-color: @edge; padding: 8px 16px; }
-QWidget#welcome QPushButton#blankEditor { color: @accent; background: transparent; border: 0; }
-QWidget#welcome QPushButton:focus, QToolBar QToolButton:focus { border: 2px solid palette(highlight); }
+QWidget#welcome QPushButton#blankEditor { color: @accent; background: transparent; border-color: transparent; }
+QWidget#welcome QPushButton:focus, QWidget#welcome QPushButton#blankEditor:focus, QToolBar QToolButton:focus { border-color: palette(highlight); }
 QLabel#lblFilename { color: @ink; font-size: @headingText; font-weight: bold; }
 QLabel#lblArchiveType, QLabel#lblPageCount, QLabel#lblTagList { color: @muted; font-style: normal; }
 QTabWidget#tabWidget::pane, QWidget#scrollAreaWidgetContents { background: @surface; }
 QTabWidget#tabWidget::pane { border: 1px solid @edge; border-radius: 5px; }
-QTabWidget#tabWidget QTabBar::tab { background: transparent; color: @muted; padding: 7px 16px; border-bottom: 2px solid transparent; }
+QTabWidget#tabWidget QTabBar::tab { background: transparent; color: @muted; padding: 7px 16px; border: 1px solid transparent; border-bottom-width: 2px; }
 QTabWidget#tabWidget QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; font-weight: bold; }
+QTabWidget#tabWidget QTabBar::tab:selected:focus { border-color: palette(highlight); }
 QTabWidget#tabWidget QTabBar::tab:hover { background: @wash; }
 QWidget#scrollAreaWidgetContents QLabel { color: @muted; font-size: @smallText; }
 QWidget#scrollAreaWidgetContents QLabel#issueHeading, QWidget#scrollAreaWidgetContents QLabel#publicationHeading,
@@ -36,6 +37,7 @@ QTableWidget#twList QHeaderView::section { background: @canvas; color: @ink; bor
 
 QLabel#tagSupportHint { color: @muted; font-size: @smallText; padding: 3px 0; }
 QWidget#coverImageContainer QPushButton { background: @surface; color: @accent; border: 1px solid @edge; border-radius: 4px; font-size: @headingText; }
+QWidget#coverImageContainer QPushButton:focus { border-color: palette(highlight); }
 QTabWidget#tabWidget::tab-bar { alignment: left; }
 QTabWidget#tabWidget QTabBar, QTabWidget#tabWidget QTabBar::tab { background: @canvas; }
 QTabWidget#tabWidget QTabBar::tab:selected { background: @surface; }

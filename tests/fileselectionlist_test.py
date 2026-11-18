@@ -308,3 +308,117 @@ def test_opening_files_selects_first_requested_archive_after_sorting(tmp_path, c
     file_list.add_path_list([str(path) for path in paths], recursive=False)
     qtbot.waitUntil(lambda: not file_list.path_load_threads)
     assert file_list.get_current_archive().path == paths[0]
+
+
+@pytest.mark.parametrize("active_deleted", [False, True])
+def test_selecting_deleted_archive_preserves_active_draft(tmp_path, config, qtbot, active_deleted) -> None:
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: pytest.fail("Unexpected draft prompt"))
+    qtbot.addWidget(file_list)
+    paths = [tmp_path / name for name in ("fallback.cbz", "active.cbz", "deleted.cbz")]
+    rows = []
+    for path in paths:
+        shutil.copy(cbz_path, path)
+        row, _ = file_list.add_path_item(str(path))
+        rows.append(row)
+    file_list.twList.selectRow(rows[1])
+    file_list.set_modified_flag(True)
+    selected_archives = []
+    file_list.selectionChanged.connect(selected_archives.append)
+
+    paths[2].unlink()
+    if active_deleted:
+        paths[1].unlink()
+    file_list.twList.selectRow(rows[2])
+
+    assert file_list.loaded_paths == set(paths[:2])
+    assert file_list.get_current_archive().path == paths[1]
+    qtbot.waitUntil(lambda: [archive.path for archive in file_list.get_selected_archive_list()] == [paths[1]])
+    assert file_list.dirty_flag
+    assert not selected_archives
+
+
+def test_cancelling_load_during_final_archive_probe(monkeypatch, tmp_comic, config, qtbot) -> None:
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    prepared = PreparedPathItem(tmp_comic, "ZIP", (), True)
+
+    def blocking_probe(*_args):
+        probe_started.set()
+        release_probe.wait(timeout=2)
+        return prepared
+
+    monkeypatch.setattr("comictaggerlib.fileselectionlist.prepare_path_item", blocking_probe)
+    file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
+    qtbot.addWidget(file_list)
+    file_list.add_path_list([str(tmp_comic.path)], recursive=False)
+    qtbot.waitUntil(probe_started.is_set)
+    (dialog,) = file_list.path_load_dialogs.values()
+    dialog.canceled.emit()
+    release_probe.set()
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+
+    assert file_list.twList.rowCount() == 0
+    file_list.add_path_list([str(tmp_comic.path)], recursive=False)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    assert file_list.get_current_archive() is tmp_comic
+
+
+def test_removing_multiple_archives_after_save_reorders_rows(tmp_path, config, qtbot) -> None:
+    paths = [tmp_path / name for name in ("a.cbz", "b.cbz", "c.cbz", "d.cbz")]
+    for path in paths:
+        shutil.copy(cbz_path, path)
+
+    def save_draft(_title, _description):
+        current_row = file_list.twList.currentRow()
+        file_list.twList.item(current_row, file_list.MDFlagColNum).setText("cr, newly written tags")
+        assert file_list.twList.currentRow() != current_row
+        file_list.set_modified_flag(False)
+        return True
+
+    file_list = FileSelectionList(None, config[0], save_draft)
+    qtbot.addWidget(file_list)
+    file_list.set_sorting(file_list.MDFlagColNum, QtCore.Qt.SortOrder.AscendingOrder)
+    file_list.add_path_list([str(path) for path in paths], recursive=False)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    selected_rows = [file_list.get_current_list_row(str(path))[0] for path in (paths[0], paths[2])]
+    file_list.twList.selectRow(selected_rows[0])
+    file_list.twList.setRangeSelected(
+        QtWidgets.QTableWidgetSelectionRange(selected_rows[1], 0, selected_rows[1], file_list.twList.columnCount() - 1),
+        True,
+    )
+    file_list.set_modified_flag(True)
+    file_list.remove_selection()
+
+    assert file_list.loaded_paths == {paths[1], paths[3]}
+    assert file_list.get_current_archive().path in file_list.loaded_paths
+
+
+def test_open_finishing_during_draft_prompt_waits_for_the_decision(tmp_path, config, qtbot) -> None:
+    paths = [tmp_path / name for name in ("active.cbz", "first-open.cbz", "second-open.cbz")]
+    for path in paths:
+        shutil.copy(cbz_path, path)
+    prompts = []
+    selected_archives = []
+
+    def verify_change(title, _description):
+        prompts.append(title)
+        if len(prompts) == 1:
+            file_list.add_path_list([str(paths[2])], recursive=False)
+            qtbot.waitUntil(lambda: all(str(paths[2]) not in thread.paths for thread in file_list.path_load_threads))
+            return False
+        return True
+
+    file_list = FileSelectionList(None, config[0], verify_change)
+    qtbot.addWidget(file_list)
+    file_list.set_sorting(file_list.fileColNum, QtCore.Qt.SortOrder.DescendingOrder)
+    file_list.add_path_list([str(paths[0])], recursive=False)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads)
+    file_list.selectionChanged.connect(selected_archives.append)
+    file_list.set_modified_flag(True)
+
+    file_list.add_path_list([str(paths[1])], recursive=False)
+    qtbot.waitUntil(lambda: not file_list.path_load_threads and len(prompts) == 2)
+
+    assert [archive.path for archive in selected_archives] == [paths[2]]
+    assert file_list.get_current_archive() is selected_archives[0]
+    assert file_list.get_selected_archive_list() == selected_archives

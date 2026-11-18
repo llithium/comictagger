@@ -41,24 +41,6 @@ def test_copy_tags_keeps_cancel_available_during_the_last_archive(tmp_path, conf
     assert not progress.isVisible()
 
 
-@pytest.fixture
-def workspace(plugin_config, qtbot, monkeypatch):
-    from PyQt6 import QtNetwork
-
-    from comictaggerlib.taggerwindow import TaggerWindow
-
-    monkeypatch.setattr(TaggerWindow, "setup_logger", lambda window: QtWidgets.QDialog(window))
-    config, talkers = plugin_config
-    config[0].Dialog_Flags__show_disclaimer = False
-    config[0].Dialog_Flags__notify_plugin_changes = False
-    config[0].General__prompt_on_save = False
-    window = TaggerWindow(config, talkers, QtNetwork.QLocalServer())
-    qtbot.addWidget(window)
-    window.show()
-    window._post_show([])
-    return window
-
-
 def test_alternate_numbering_has_distinct_accessible_names(workspace):
     assert workspace.leAltSeries.accessibleName() == "Alternate series"
     assert workspace.leAltIssueNum.accessibleName() == "Alternate issue"
@@ -402,3 +384,128 @@ def test_save_button_changes_appearance_when_an_archive_opens(workspace, tmp_com
     qtbot.waitUntil(lambda: workspace.comic_archive is not None)
     assert button.isEnabled()
     assert fill_color() != disabled_color
+
+
+def test_save_without_write_tags_keeps_draft(workspace, tmp_comic, qtbot, monkeypatch):
+    from comicapi.comicarchive import ComicArchive
+    from comictaggerlib import taggerwindow
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    original_title = ComicArchive(tmp_comic.path).read_tags("cr").title
+    workspace.config[0].Runtime_Options__tags_write = []
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Unwritten draft")
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "warning", Mock())
+    try:
+        assert not workspace.write_tags()
+        assert workspace.dirty_flag
+        assert workspace.leTitle.text() == "Unwritten draft"
+        assert ComicArchive(tmp_comic.path).read_tags("cr").title == original_title
+    finally:
+        workspace.clear_dirty_flag()
+
+
+def test_save_keeps_draft_when_tags_cannot_be_reloaded(workspace, tmp_comic, qtbot, monkeypatch):
+    from comicapi.comicarchive import ComicArchive
+    from comictaggerlib import taggerwindow
+
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Edited title")
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "warning", Mock())
+    monkeypatch.setattr(
+        taggerwindow,
+        "read_configured_tags",
+        Mock(return_value=(GenericMetadata(title="Partial reload"), [], OSError("Unreadable tags"))),
+    )
+    try:
+        assert not workspace.write_tags()
+        assert ComicArchive(tmp_comic.path).read_tags("cr").title == "Edited title"
+        assert workspace.dirty_flag
+        assert workspace.leTitle.text() == "Edited title"
+    finally:
+        workspace.clear_dirty_flag()
+
+
+def test_archive_pane_keeps_a_complete_row_in_a_compact_window(workspace, tmp_comic, qtbot):
+    workspace.resize(800, 500)
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    table = workspace.fileSelectionList.twList
+    workspace.resize(workspace.size().width(), 500)
+    workspace.splitter.setSizes([workspace.splitter.height(), 0])
+    QtWidgets.QApplication.processEvents()
+
+    assert table.viewport().rect().contains(table.visualItemRect(table.item(0, 0)).topLeft())
+    assert table.viewport().height() >= table.rowHeight(0)
+
+
+def test_open_finishing_during_read_tag_prompt_preserves_save_target(workspace, tmp_comic, qtbot, monkeypatch):
+    import shutil
+
+    from comicapi.comicarchive import ComicArchive
+
+    first = tmp_comic.path
+    second = first.with_name("Another issue.cbz")
+    shutil.copyfile(first, second)
+    original_title = ComicArchive(second).read_tags("cr").title
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(first)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Save before changing read tags")
+    prompts = []
+    choices = QtWidgets.QMessageBox.StandardButton
+
+    def choose(_parent, title, *_args):
+        prompts.append(title)
+        if len(prompts) == 1:
+            workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(second)))
+            qtbot.waitUntil(lambda: not workspace.fileSelectionList.path_load_threads)
+            return choices.Save
+        return choices.Discard
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", choose)
+    workspace.select_read_tags(["cr"])
+    qtbot.waitUntil(lambda: workspace.comic_archive.path == second)
+
+    assert prompts == ["Change Read Tags"]
+    assert ComicArchive(first).read_tags("cr").title == "Save before changing read tags"
+    assert ComicArchive(second).read_tags("cr").title == original_title
+    assert workspace.fileSelectionList.get_current_archive() is workspace.comic_archive
+    assert not workspace.dirty_flag
+
+
+def test_archive_open_during_cancelled_close_preserves_draft(workspace, tmp_comic, qtbot, monkeypatch):
+    import shutil
+
+    first = tmp_comic.path
+    second = first.with_name("Another issue.cbz")
+    shutil.copyfile(first, second)
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(first)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Keep this draft")
+    prompts = []
+
+    def cancel(_parent, title, *_args):
+        prompts.append(title)
+        if len(prompts) == 1:
+            workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(second)))
+            qtbot.waitUntil(lambda: not workspace.fileSelectionList.path_load_threads)
+            assert len(prompts) == 1
+        return QtWidgets.QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", cancel)
+    try:
+        assert not workspace.close()
+        qtbot.waitUntil(lambda: len(prompts) == 2)
+        assert prompts == [f"Exit {workspace.appName}", "Change Archive"]
+        assert workspace.isVisible()
+        assert workspace.comic_archive.path == first
+        assert workspace.fileSelectionList.get_current_archive() is workspace.comic_archive
+        assert workspace.dirty_flag
+        assert workspace.leTitle.text() == "Keep this draft"
+    finally:
+        workspace.clear_dirty_flag()
