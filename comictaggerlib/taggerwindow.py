@@ -25,7 +25,6 @@ import os
 import platform
 import queue
 import sys
-import textwrap
 import threading
 import traceback
 import webbrowser
@@ -52,6 +51,7 @@ from comictaggerlib.cbltransformer import CBLTransformer
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.crediteditorwindow import CreditEditorWindow
 from comictaggerlib.ctsettings import ct_ns
+from comictaggerlib.draftreview import DraftReview
 from comictaggerlib.exportwindow import ExportConfig, ExportConflictOpts, ExportWindow
 from comictaggerlib.fileselectionlist import FileSelectionList
 from comictaggerlib.graphics import graphics_path
@@ -194,7 +194,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         grid_layout = QtWidgets.QGridLayout(self.tabPages)
         grid_layout.addWidget(self.page_list_editor)
 
-        self.fileSelectionList = FileSelectionList(self.widgetListHolder, self.config[0], self.dirty_flag_verification)
+        self.fileSelectionList = FileSelectionList(
+            self.widgetListHolder, self.config[0], self.dirty_flag_verification, self.review_blank_draft
+        )
         grid_layout = QtWidgets.QGridLayout(self.widgetListHolder)
         grid_layout.addWidget(self.fileSelectionList)
 
@@ -258,6 +260,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.page_browser: PageBrowserWindow | None = None
         self.comic_archive: ComicArchive | None = None
+        self._reviewed_draft: tuple[ComicArchive, GenericMetadata] | None = None
         self.dirty_flag = False
         self.droppedFile = None
         self.page_loader = None
@@ -350,62 +353,23 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.raise_()
         QtCore.QCoreApplication.processEvents()
 
-        if self.config[0].Dialog_Flags__show_disclaimer:
-
-            def set_checked(checked: bool) -> None:
-                self.config[0].Dialog_Flags__show_disclaimer = not checked
-
-            OptionalMessageDialog.msg(
-                self,
-                "Welcome!",
-                textwrap.dedent("""
-                Thanks for trying ComicTagger!
-
-                Be aware that this is beta-level software, and consider it experimental.
-
-                You should use it very carefully when modifying your data files.  As the
-                license says, it's "AS IS!"
-
-                Also, be aware that writing tags to comic archives will change their file hashes,
-                which has implications with respect to other software packages.  It's best to
-                use ComicTagger on local copies of your comics.
-
-                Additional metadata sources are listed [here] along with links to available plugins.
-
-                COMIC VINE NOTE: Using the default API key will serverly limit search and tagging
-                times. A personal API key will allow for a **5 times increase** in online search speed. See the
-                [Wiki page]
-                for more information.
-
-                Have fun!
-
-                [here]: https://github.com/comictagger/comictagger/wiki/Comic-and-Manga-Information-Sources
-                [Wiki page]: https://github.com/comictagger/comictagger/wiki/UserGuide#comic-vine
-                    """),
-            ).check_status.connect(set_checked)
-
-        if self.config[0].Dialog_Flags__notify_plugin_changes:
-
-            def set_checked(checked: bool) -> None:
-                self.config[0].Dialog_Flags__notify_plugin_changes = not checked
-
-            OptionalMessageDialog.msg(
-                self,
-                "Plugins Have moved!",
-                textwrap.dedent(f"""
-                Due to techinical issues the Metron is not supported anymore and the GCD plugin is no longer bundled in ComicTagger!
-
-                You will need to download the .zip or .whl from the GitHub release page to:
-                ```plain
-                {str(self.config[0].Runtime_Options__config.user_plugin_dir)}
-                ```
-                GCD: https://github.com/comictagger/gcd_talker/releases
-
-                For more information on installing plugins see the wiki page:
-
-                https://github.com/comictagger/comictagger/wiki/Installing-plugins
-                """),
-            ).check_status.connect(set_checked)
+        source = self.config[0].Sources__source
+        if source in ("gcd", "metron") and source not in self.talkers:
+            # Recover profiles that still select a source removed from the distribution.
+            default_source = self.cbx_sources.findData("comicvine")
+            self.cbx_sources.setCurrentIndex(max(0, default_source))
+            if self.config[0].Dialog_Flags__notify_plugin_changes:
+                message = (
+                    "GCD is now a separate plugin. Install the GCD plugin to use it again."
+                    if source == "gcd"
+                    else "Metron is no longer available."
+                )
+                OptionalMessageDialog.information(
+                    self,
+                    "Metadata source changed",
+                    f"{message} Your source is now {self.cbx_sources.currentText()}."
+                    + ("\n\nhttps://github.com/comictagger/gcd_talker/releases" if source == "gcd" else ""),
+                )
 
         try:
             if self.config[0].General__check_for_new_version:
@@ -425,11 +389,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.frameInfoBox.setFixedWidth(216)
         self.verticalLayout.setStretch(0, 1)
         self.verticalLayout.setSpacing(8)
-        self.tagSupportHint = QtWidgets.QLabel("Shaded fields are unavailable for the selected write tags.")
-        self.tagSupportHint.setObjectName("tagSupportHint")
-        self.tagSupportHint.setFixedWidth(216)
-        self.tagSupportHint.setWordWrap(True)
-        self.verticalLayout.insertWidget(3, self.tagSupportHint)
+        self.field_labels = {
+            label.buddy(): (label, label.text())
+            for label in self.tabWidget.findChildren(QtWidgets.QLabel)
+            if label.buddy() is not None
+        }
         self.horizontalLayout_2.setContentsMargins(6, 0, 6, 4)
         self.horizontalLayout_2.setSpacing(18)
         self.gridLayout_5.setContentsMargins(5, 2, 5, 4)
@@ -873,7 +837,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def update_menus(self) -> None:
         enabled = self.comic_archive is not None
         writeable = self.comic_archive is not None and self.comic_archive.is_writable()
-        self.actionWrite_Tags.setEnabled(enabled)
+        blank_draft = not enabled and self.dirty_flag
+        self.actionWrite_Tags.setText("Choose archive…" if blank_draft else "Save tags")
+        self.actionWrite_Tags.setEnabled(enabled or blank_draft)
         self.actionApplyCBLTransform.setEnabled(enabled)
         self.actionAutoIdentify.setEnabled(enabled)
         self.actionAutoTag.setEnabled(enabled)
@@ -929,12 +895,16 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if not self.dirty_flag:
             self.dirty_flag = True
             self.fileSelectionList.set_modified_flag(True)
+            if self.comic_archive is None:
+                self.update_menus()
             self.update_app_title()
 
     def clear_dirty_flag(self) -> None:
         if self.dirty_flag:
             self.dirty_flag = False
             self.fileSelectionList.set_modified_flag(False)
+            if self.comic_archive is None:
+                self.update_menus()
             self.update_app_title()
 
     def connect_dirty_flag_signals(self) -> None:
@@ -1390,34 +1360,51 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.toast.show()
 
     def prompt_write_tags(self) -> None:
-        if self.metadata is None or self.comic_archive is None:
-            OptionalMessageDialog.information(self, "Whoops!", "No data to write!")
+        if self.comic_archive is None:
+            if self.dirty_flag:
+                self.select_file()
             return
         if not self.comic_archive.is_writable():
             self._toast("Unable to write Tags", f"Archive is not writeable\n{self.comic_archive.path}", 5000)
             return
 
-        if not self.config[0].Runtime_Options__tags_write or not self.config[0].General__prompt_on_save:
+        config = self.config[0]
+        if not config.Runtime_Options__tags_write or not (
+            config.General__prompt_on_save or config.Dialog_Flags__show_disclaimer
+        ):
             self.write_tags()
             return
 
-        qmsg = OptionalMessageDialog.msg(
-            parent=self,
-            title="Save Tags",
-            msg=f"Are you sure you wish to save {', '.join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])} tags to this archive?",
-            icon=OptionalMessageDialog.Icon.Question,
-        )
         archive = self.comic_archive
+        formats = ", ".join(tags[tag_id].name() for tag_id in config.Runtime_Options__tags_write)
+        dialog = QtWidgets.QMessageBox(self)
+        if hasattr(QtWidgets.QMessageBox, "Option"):  # Qt 6.6+
+            dialog.setOption(QtWidgets.QMessageBox.Option.DontUseNativeDialog)
+        dialog.setWindowTitle("Save tags")
+        dialog.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        dialog.setText(f"Save {formats} tags to {archive.path.name}?")
+        dialog.setInformativeText(self.with_write_notice(""))
+        save = dialog.addButton("Save tags", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        cancel = dialog.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        skip = QtWidgets.QCheckBox("Skip future save confirmations")
+        dialog.setCheckBox(skip)
 
-        def save_confirmed_archive() -> None:
-            if self.comic_archive is archive:
-                self.write_tags()
+        def finish_save() -> None:
+            if dialog.clickedButton() is save and self.comic_archive is archive and self.write_tags():
+                if skip.isChecked():
+                    config.General__prompt_on_save = False
 
-        qmsg.accepted.connect(save_confirmed_archive)
-        qmsg.check_status.connect(self._update_prompt_on_save)
+        dialog.finished.connect(finish_save)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
 
-    def _update_prompt_on_save(self, check: bool) -> None:
-        self.config[0].General__prompt_on_save = not check
+    def with_write_notice(self, message: str) -> str:
+        if self.config[0].Dialog_Flags__show_disclaimer:
+            notice = "Saving tag changes gives the archive a new file hash. Use a copy if another app relies on the original hash."
+            return f"{message}\n\n{notice}" if message else notice
+        return message
 
     def write_tags(self) -> bool:
         if self.comic_archive is None:
@@ -1460,6 +1447,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Save failed", save_error)
             return False
 
+        self.config[0].Dialog_Flags__show_disclaimer = False
         self.metadata = reloaded_metadata
         self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
@@ -1517,11 +1505,15 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         for md_field, widget in self.md_attributes.items():
             if widget is not None and not isinstance(widget, (int)):
-                enable_widget(widget, md_field in enabled_widgets)
+                supported = md_field in enabled_widgets
+                enable_widget(widget, supported)
+                for control in widget if isinstance(widget, tuple) else (widget,):
+                    control.setAccessibleDescription("" if supported else "Unavailable for the selected write tags.")
+                    if control in self.field_labels:
+                        label, text = self.field_labels[control]
+                        label.setText(text if supported else f"{text} (unavailable)")
+                        label.setWordWrap(not supported)
 
-        self.tagSupportHint.setVisible(
-            any(not field.isEnabled() for field in self.scrollAreaWidgetContents.findChildren(QtWidgets.QLineEdit))
-        )
         self.update_credit_colors()
         self.page_list_editor.select_write_tags(self.config[0].Runtime_Options__tags_write)
         self.toggle_enable_embedding_hashes()
@@ -1867,7 +1859,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         OptionalMessageDialog.question(
             self,
             "Remove Tags",
-            f"Are you sure you wish to remove {', '.join([f'{tags[tag_id].name()} tags from {count} files' for tag_id, count in file_md_count.items()])} removing a total of {md_count} tag(s)?",
+            self.with_write_notice(
+                f"Are you sure you wish to remove {', '.join([f'{tags[tag_id].name()} tags from {count} files' for tag_id, count in file_md_count.items()])} removing a total of {md_count} tag(s)?"
+            ),
             check_text=None,
         ).accepted.connect(functools.partial(self.remove_tags, tag_ids, md_count))
 
@@ -1906,6 +1900,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_info_box()
         self.update_menus()
 
+        if success_count:
+            self.config[0].Dialog_Flags__show_disclaimer = False
         summary = f"Successfully removed {success_count} tags in archive(s)."
         if failed_list:
             summary += f"\n\nThe remove operation failed in the following {len(failed_list)} archive(s):\n"
@@ -1964,7 +1960,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         OptionalMessageDialog.question(
             self,
             "Copy Tags",
-            details,
+            self.with_write_notice(details),
             icon=OptionalMessageDialog.Icon.Question,
             check_text=None,
         ).accepted.connect(functools.partial(self.copy_tags, src_tag_ids, dest_tag_ids, ca_list))
@@ -2023,6 +2019,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_info_box()
         self.update_menus()
 
+        if success_count:
+            self.config[0].Dialog_Flags__show_disclaimer = False
         summary = f"Successfully copied tags in {success_count} archive(s)."
         if failed_list:
             summary += f"\n\nThe copy operation failed in the following {len(failed_list)} archive(s):\n"
@@ -2056,7 +2054,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         atstartdlg = AutoTagStartWindow(
             self,
             self.config[0],
-            (
+            self.with_write_notice(
                 f"You have selected {len(ca_list)} archive(s) to automatically identify and write "
                 + f"{tag_names} tags to.\n\nPlease choose config below, and select OK to Auto-Tag."
             ),
@@ -2107,6 +2105,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.atprogdialog.accept()
 
         self.fileSelectionList.remove_archive_list(archives_to_remove)
+        if match_results.good_matches:
+            self.config[0].Dialog_Flags__show_disclaimer = False
         self.fileSelectionList.show_auto_tag_results(match_results)
         self._reload_page()
         self.atprogdialog = None
@@ -2189,6 +2189,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             buttons = QtWidgets.QMessageBox.StandardButton.Cancel | QtWidgets.QMessageBox.StandardButton.Discard
             if self.comic_archive is not None and self.comic_archive.is_writable():
                 buttons |= QtWidgets.QMessageBox.StandardButton.Save
+                desc = self.with_write_notice(desc)
             reply = QtWidgets.QMessageBox.question(
                 self,
                 title,
@@ -2315,6 +2316,45 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.populate_tag_names()
             self.adjust_tags_combo()
 
+    def review_blank_draft(self, archive: ComicArchive) -> bool:
+        self._reviewed_draft = None
+        config = self.config[0]
+        read_tags = config.Runtime_Options__tags_read
+        # Include existing destination tags so a draft preserves fields that are
+        # only present in a write format. The selected read formats take precedence.
+        destinations = [tag for tag in config.Runtime_Options__tags_write if tag not in read_tags]
+        if config.Metadata_Options__tag_merge == comicapi.merge.Mode.OVERLAY:
+            formats = destinations + read_tags
+        else:
+            formats = read_tags + destinations
+        original, _, error = read_configured_tags(archive, formats, config)
+        if error is not None:
+            OptionalMessageDialog.warning(
+                self, "Cannot review draft", f"Could not read tags from {archive.path.name}: {error}"
+            )
+            return False
+        try:
+            if original.is_empty:
+                original = parse_archive_filename(archive, self.config[0])
+            self.form_to_metadata()
+        except (ValueError, OSError) as error:
+            OptionalMessageDialog.warning(self, "Cannot review draft", str(error))
+            return False
+        draft = self.metadata.copy()
+        # The blank checkbox and page editor have no archive values to contribute.
+        draft.black_and_white = draft.black_and_white or None
+        draft.pages = []
+        draft.page_count = None
+        merged = original.copy()
+        merged.overlay(draft, merge_lists=True)
+        review = DraftReview(self, archive.path.name, original, merged, archive.is_writable())
+        result = review.exec()
+        review.deleteLater()
+        if result == QtWidgets.QDialog.DialogCode.Accepted:
+            self._reviewed_draft = (archive, merged)
+            return True
+        return result == QtWidgets.QMessageBox.StandardButton.Discard.value
+
     def load_archive(self, comic_archive: ComicArchive) -> None:
         self.comic_archive = None
         self.clear_form()
@@ -2327,6 +2367,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.config[0].internal__last_opened_folder = os.path.abspath(os.path.split(comic_archive.path)[0])
         self.comic_archive = comic_archive
+
+        reviewed, self._reviewed_draft = self._reviewed_draft, None
+        if reviewed is not None and reviewed[0] is comic_archive:
+            self.metadata = reviewed[1]
+            self.update_ui_for_archive()
+            self.set_dirty_flag()
+            return
 
         self.metadata, _, error = read_configured_tags(
             self.comic_archive, self.config[0].Runtime_Options__tags_read, self.config[0]

@@ -83,13 +83,22 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
         assert rating > 0
     else:
         qtbot.keyClicks(window.leTitle, "Draft title")
-    choices = QtWidgets.QMessageBox.StandardButton
-    question = Mock(side_effect=[choices.Cancel, choices.Discard])
-    monkeypatch.setattr(QtWidgets.QMessageBox, "question", question)
+    from comictaggerlib.draftreview import DraftReview
+
+    original = tmp_comic.read_tags("cr")
+    assert window.actionWrite_Tags.isEnabled()
+    assert window.actionWrite_Tags.text() == "Choose archive…"
+    reviews = []
+
+    def choose(dialog):
+        table = dialog.findChild(QtWidgets.QTableWidget)
+        reviews.append([[table.item(r, c).text() for c in range(3)] for r in range(table.rowCount())])
+        return QtWidgets.QDialog.DialogCode.Rejected if len(reviews) == 1 else QtWidgets.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(DraftReview, "exec", choose)
     archive_url = QtCore.QUrl.fromLocalFile(str(tmp_comic.path))
     window.open_file_event(archive_url)
     qtbot.waitUntil(lambda: not window.fileSelectionList.path_load_threads)
-    assert question.call_args.args[3] == choices.Cancel | choices.Discard
     assert window.comic_archive is None
     assert window.fileSelectionList.twList.rowCount() == 0
     assert window.dirty_flag
@@ -100,7 +109,16 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
 
     window.open_file_event(archive_url)
     qtbot.waitUntil(lambda: window.comic_archive is not None)
-    assert window.leSeries.text()
+    assert window.leSeries.text() == original.series
+    assert window.dirty_flag
+    assert len(reviews[1]) == 1
+    if draft_field == "title":
+        assert reviews[1] == [["Title", original.title, "Draft title"]]
+        assert window.leTitle.text() == "Draft title"
+    else:
+        assert reviews[1][0][0] == "Critical rating"
+        assert window.dsbCriticalRating.value() == rating
+    assert ComicArchive(tmp_comic.path).read_tags("cr") == original
     for index in range(window.tabWidget.count()):
         window.tabWidget.setCurrentIndex(index)
         assert window.tabWidget.currentWidget().isVisible()
@@ -111,6 +129,11 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
     assert window.dirty_flag
     window.actionWrite_Tags.trigger()
     assert ComicArchive(tmp_comic.path).read_tags("cr").title == "Updated issue title"
+    saved_metadata = ComicArchive(tmp_comic.path).read_tags("cr")
+    assert saved_metadata.credits == original.credits
+    assert saved_metadata.series == original.series
+    if draft_field == "rating":
+        assert saved_metadata.critical_rating == rating
     assert window.lblFilename.text() == "Updated issue title"
     assert not window.dirty_flag
 
@@ -278,18 +301,16 @@ def test_archive_pane_restores_height_after_welcome(plugin_config, qtbot, monkey
 
 
 def test_delayed_save_confirmation_is_bound_to_archive(workspace, tmp_comic, qtbot, monkeypatch):
-    from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
-
     workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
     qtbot.waitUntil(lambda: workspace.comic_archive is not None)
     workspace.config[0].General__prompt_on_save = True
     workspace.actionWrite_Tags.trigger()
-    dialog = workspace.findChild(OptionalMessageDialog)
+    dialog = workspace.findChild(QtWidgets.QMessageBox)
     assert dialog is not None
     write = Mock()
     monkeypatch.setattr(workspace, "write_tags", write)
     workspace.fileSelectionList.remove_archive_list([workspace.comic_archive])
-    dialog.accept()
+    next(b for b in dialog.buttons() if b.text() == "Save tags").click()
     write.assert_not_called()
     assert not workspace.actionWrite_Tags.isEnabled()
 
@@ -509,3 +530,142 @@ def test_archive_open_during_cancelled_close_preserves_draft(workspace, tmp_comi
         assert workspace.leTitle.text() == "Keep this draft"
     finally:
         workspace.clear_dirty_flag()
+
+
+def test_blank_draft_choose_archive_and_save_confirmation(workspace, tmp_comic, qtbot, monkeypatch, request):
+    from comicapi.comicarchive import ComicArchive, tags
+    from comictaggerlib.draftreview import DraftReview
+
+    window = workspace
+    request.addfinalizer(window.clear_dirty_flag)
+    config = window.config[0]
+    config.Dialog_Flags__show_disclaimer = True
+    config.General__prompt_on_save = True
+    # The destination already contains metadata, even with no matching read format.
+    config.Runtime_Options__tags_read = []
+    config.Runtime_Options__tags_write = ["cr"]
+    original = tmp_comic.read_tags("cr")
+    window.show_editor()
+    qtbot.keyClicks(window.leTitle, "A new title")
+
+    def choose_file(dialog):
+        dialog.filesSelected.emit([str(tmp_comic.path)])
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "open", choose_file)
+
+    def accept_review(dialog):
+        QtCore.QTimer.singleShot(0, dialog.apply_button.click)
+        return QtWidgets.QDialog.exec(dialog)
+
+    monkeypatch.setattr(DraftReview, "exec", accept_review)
+    window.actionWrite_Tags.trigger()
+    qtbot.waitUntil(lambda: window.comic_archive is not None)
+    assert window.dirty_flag
+    window.actionWrite_Tags.trigger()
+    dialog = window.findChild(QtWidgets.QMessageBox)
+    assert tmp_comic.path.name in dialog.text()
+    for tag_id in config.Runtime_Options__tags_write:
+        assert tags[tag_id].name() in dialog.text()
+    assert "file hash" in dialog.informativeText()
+    cancel = dialog.button(QtWidgets.QMessageBox.StandardButton.Cancel)
+    assert dialog.defaultButton() is cancel
+    dialog.checkBox().setChecked(True)
+    cancel.click()
+    assert window.dirty_flag
+    assert config.General__prompt_on_save
+    assert config.Dialog_Flags__show_disclaimer
+    assert ComicArchive(tmp_comic.path).read_tags("cr") == original
+
+    window.actionWrite_Tags.trigger()
+    dialog = next(d for d in window.findChildren(QtWidgets.QMessageBox) if d.isVisible())
+    dialog.checkBox().setChecked(True)
+    next(b for b in dialog.buttons() if b.text() == "Save tags").click()
+    assert not window.dirty_flag
+    assert not config.General__prompt_on_save
+    assert not config.Dialog_Flags__show_disclaimer
+    saved = ComicArchive(tmp_comic.path).read_tags("cr")
+    assert saved.title == "A new title"
+    assert saved.pages == original.pages
+    assert saved.description == original.description
+    assert saved.credits == original.credits
+
+
+@pytest.mark.parametrize(
+    "source,gcd_installed,notice",
+    [
+        ("comicvine", False, False),
+        ("gcd", False, True),
+        ("gcd", True, False),
+        ("metron", False, True),
+    ],
+)
+def test_startup_notices_only_for_an_unavailable_legacy_source(
+    plugin_config, qtbot, monkeypatch, source, gcd_installed, notice
+):
+    from PyQt6 import QtNetwork
+
+    from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
+    from comictaggerlib.taggerwindow import TaggerWindow
+
+    config, talkers = plugin_config
+    talkers = {"comicvine": talkers["comicvine"]}
+    if gcd_installed:
+        talkers["gcd"] = SimpleNamespace(name="Grand Comics Database")
+    config[0].Sources__source = source
+    info = Mock()
+    welcome = Mock()
+    monkeypatch.setattr(OptionalMessageDialog, "information", info)
+    monkeypatch.setattr(OptionalMessageDialog, "msg", welcome)
+    monkeypatch.setattr(TaggerWindow, "setup_logger", lambda w: QtWidgets.QDialog(w))
+    window = TaggerWindow(config, talkers, QtNetwork.QLocalServer())
+    qtbot.addWidget(window)
+    window.show()
+    window._post_show([])
+    welcome.assert_not_called()
+    assert info.called == notice
+    assert config[0].Sources__source in talkers
+    assert window.welcome.isVisible()
+
+
+def test_field_availability_follows_selected_write_tags(workspace):
+    window = workspace
+    label, text = window.field_labels[window.leTitle]
+    config = window.config[0]
+    config.Runtime_Options__tags_write = []
+    window.update_tag_tweaks()
+    assert "unavailable" in label.text()
+    assert "write tags" in window.leTitle.accessibleDescription()
+    assert not window.leTitle.isEnabled()
+    config.Runtime_Options__tags_write = ["cr"]
+    window.update_tag_tweaks()
+    assert label.text() == text
+    assert window.leTitle.isEnabled()
+    assert not window.leTitle.accessibleDescription()
+
+
+def test_draft_review_read_only_cancel_and_discard(workspace, tmp_comic, qtbot, monkeypatch):
+    from comictaggerlib.draftreview import DraftReview
+
+    original = tmp_comic.read_tags("cr")
+    workspace.show_editor()
+    qtbot.keyClicks(workspace.leTitle, "My draft")
+    monkeypatch.setattr(type(tmp_comic), "is_writable", lambda self: False)
+    decisions = iter(["Cancel", "Discard draft and open"])
+
+    def decide(dialog):
+        assert not dialog.apply_button.isEnabled()
+        choice = next(decisions)
+        button = next(b for b in dialog.findChildren(QtWidgets.QPushButton) if b.text() == choice)
+        QtCore.QTimer.singleShot(0, button.click)
+        return QtWidgets.QDialog.exec(dialog)
+
+    monkeypatch.setattr(DraftReview, "exec", decide)
+    url = QtCore.QUrl.fromLocalFile(str(tmp_comic.path))
+    workspace.open_file_event(url)
+    qtbot.waitUntil(lambda: not workspace.fileSelectionList.path_load_threads)
+    assert workspace.leTitle.text() == "My draft"
+    assert workspace.comic_archive is None
+    workspace.open_file_event(url)
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    assert workspace.leTitle.text() == original.title
+    assert not workspace.dirty_flag
