@@ -4,7 +4,7 @@ QToolBar QToolButton, QWidget#welcome QPushButton { color: @ink; background: tra
 QToolBar QToolButton:hover, QWidget#welcome QPushButton:hover { background: @wash; }
 QToolBar QToolButton:disabled { color: palette(placeholder-text); }
 QToolBar::separator { width: 1px; background: @edge; margin: 7px 5px; }
-QToolBar QToolButton#saveTags, QWidget#welcome QPushButton#openArchive { background: @accent; color: @onAccent; font-weight: bold; }
+QToolBar QToolButton#saveTags:enabled, QWidget#welcome QPushButton#openArchive { background: @accent; color: @onAccent; font-weight: bold; }
 QWidget#welcome { background: @surface; border: 1px solid @edge; border-radius: 8px; }
 QWidget#welcome QLabel { color: @muted; }
 QWidget#welcome QLabel#welcomeTitle { color: @ink; font-size: @welcomeText; font-weight: bold; }

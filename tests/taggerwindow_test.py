@@ -337,3 +337,68 @@ def test_save_before_removal_follows_archive_after_tags_resort(workspace, tmp_co
     assert files.loaded_paths == {other}
     assert workspace.comic_archive.path == other
     assert ComicArchive(selected).read_tags("cr").title == "Saved before removal"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_partial_save_refreshes_archive_status_and_keeps_edits(workspace, tmp_comic, qtbot, monkeypatch, raises):
+    from comicapi.comicarchive import ComicArchive
+    from comictaggerlib import taggerwindow
+
+    assert tmp_comic.remove_tags("cr")
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    files = workspace.fileSelectionList
+    cell = files.twList.item(0, files.MDFlagColNum)
+    assert not cell.text()
+    assert not workspace.view_tag_actions["cr"].isEnabled()
+    archive = workspace.comic_archive
+    write = archive.write_tags
+
+    def write_format(metadata, tag_id):
+        if tag_id == "cr":
+            return write(metadata, tag_id)
+        if raises:
+            raise OSError("Tag writer failed")
+        return False
+
+    monkeypatch.setitem(taggerwindow.tags, "second", Mock(enabled=False))
+    monkeypatch.setitem(workspace.view_tag_actions, "second", Mock())
+    monkeypatch.setitem(workspace.remove_tag_actions, "second", Mock())
+    monkeypatch.setattr(archive, "write_tags", write_format)
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "warning", Mock())
+    workspace.config[0].Runtime_Options__tags_write = ["cr", "second"]
+    workspace.leTitle.selectAll()
+    qtbot.keyClicks(workspace.leTitle, "Partial save")
+    try:
+        assert not workspace.write_tags()
+        assert ComicArchive(tmp_comic.path).read_tags("cr").title == "Partial save"
+        assert "cr" in cell.text().split(", ")
+        assert "Comic Rack" in workspace.lblTagList.text()
+        assert workspace.view_tag_actions["cr"].isEnabled()
+        assert workspace.remove_tag_actions["cr"].isEnabled()
+        assert workspace.dirty_flag
+        assert workspace.leTitle.text() == "Partial save"
+    finally:
+        workspace.clear_dirty_flag()
+
+
+@pytest.mark.parametrize("window_color", ["black", "white"])
+def test_save_button_changes_appearance_when_an_archive_opens(workspace, tmp_comic, qtbot, window_color):
+    from PyQt6 import QtGui
+
+    palette = workspace.palette()
+    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(window_color))
+    workspace.setPalette(palette)
+    workspace.show_editor()
+    button = workspace.toolBar.widgetForAction(workspace.actionWrite_Tags)
+
+    def fill_color():
+        image = button.grab().toImage()
+        return image.pixelColor(image.width() // 2, round(3 * image.devicePixelRatio()))
+
+    assert not button.isEnabled()
+    disabled_color = fill_color()
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+    assert button.isEnabled()
+    assert fill_color() != disabled_color

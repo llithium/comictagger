@@ -1385,27 +1385,34 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.config[0].General__prompt_on_save = not check
 
     def write_tags(self) -> bool:
+        if self.comic_archive is None:
+            return False
+        save_error = None
         QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
         try:
             self.form_to_metadata()
-            assert self.comic_archive
             _, failed_tag = write_selected_tags(
                 self.comic_archive, self.metadata, self.config[0].Runtime_Options__tags_write
             )
             self.comic_archive.load_cache(set(tags))
+            if failed_tag:
+                save_error = f"The tag save operation seemed to fail for: {tags[failed_tag].name()}"
         except Exception as write_error:
             logger.exception("Failed to save metadata")
-            OptionalMessageDialog.warning(self, "Save failed", str(write_error))
-            return False
+            save_error = str(write_error)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
-        if failed_tag:
-            OptionalMessageDialog.warning(
-                self,
-                "Save failed",
-                f"The tag save operation seemed to fail for: {tags[failed_tag].name()}",
-            )
+        row, _ = self.fileSelectionList.get_current_list_row(str(self.comic_archive.path))
+        if save_error is not None:
+            # Earlier formats may already be on disk. Keep the editor intact for retry.
+            try:
+                self.fileSelectionList.update_row(row)
+                self.update_info_box()
+                self.update_menus()
+            except Exception:
+                logger.exception("Failed to refresh archive status after a save error")
+            OptionalMessageDialog.warning(self, "Save failed", save_error)
             return False
 
         self.metadata, _, error = read_configured_tags(
@@ -1419,7 +1426,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 f"One or more of the selected read tags failed to load for {self.comic_archive.path}, check log for details",
             )
 
-        row, _ = self.fileSelectionList.get_current_list_row(str(self.comic_archive.path))
         self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
         return True
