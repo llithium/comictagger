@@ -497,6 +497,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.welcome.hide()
         self.splitter.show()
         if entering_editor:
+            self.tabWidget.setCurrentWidget(self.tab)
             self.leSeries.setFocus()
 
     def changeEvent(self, event: QtCore.QEvent) -> None:

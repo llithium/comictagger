@@ -6,13 +6,22 @@ QtCore = pytest.importorskip("PyQt6.QtCore")
 QtWidgets = pytest.importorskip("PyQt6.QtWidgets")
 
 
-def test_opening_blank_editor_moves_keyboard_focus_to_series(workspace, qtbot):
+@pytest.mark.parametrize("return_from_pages", [False, True], ids=["startup", "after-last-archive"])
+def test_opening_blank_editor_moves_keyboard_focus_to_series(workspace, qtbot, tmp_comic, return_from_pages):
+    if return_from_pages:
+        workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+        qtbot.waitUntil(lambda: workspace.comic_archive is not None)
+        workspace.tabWidget.setCurrentWidget(workspace.tabPages)
+        workspace.fileSelectionList.remove_selection()
+        assert workspace.welcome.isVisible()
+
     blank = workspace.welcome.findChild(QtWidgets.QPushButton, "blankEditor")
     blank.setFocus()
     qtbot.keyClick(blank, QtCore.Qt.Key.Key_Space)
 
+    assert workspace.tabWidget.currentWidget() is workspace.tab
     assert workspace.leSeries.hasFocus()
-    qtbot.keyClicks(workspace.leSeries, "Keyboard draft")
+    qtbot.keyClicks(workspace.focusWidget(), "Keyboard draft")
     assert workspace.leSeries.text() == "Keyboard draft"
     workspace.dirty_flag = False
 
