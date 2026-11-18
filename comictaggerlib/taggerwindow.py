@@ -383,10 +383,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
 
     def configure_workspace(self) -> None:
-        self.coverImageContainer.setFixedWidth(216)
+        sidebar_width = 288
+        self.coverImageContainer.setFixedWidth(sidebar_width)
         self.coverImageContainer.setMinimumHeight(116)
-        self.coverImageContainer.setMaximumHeight(288)
-        self.frameInfoBox.setFixedWidth(216)
+        self.coverImageContainer.setMaximumHeight(480)
+        self.frameInfoBox.setFixedWidth(sidebar_width)
         self.verticalLayout.setStretch(0, 1)
         self.verticalLayout.setSpacing(8)
         self.field_labels = {

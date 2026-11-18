@@ -139,7 +139,7 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
 
     label = window.lblTagList
     assert label.wordWrap()
-    label.setText("Tags: Comic Rack, ComicBookLover, CoMet")
+    label.setText("Tags: Comic Rack, ComicBookLover, CoMet, Comic Archive Info, Comic Metadata")
     qtbot.waitUntil(lambda: label.height() >= 2 * label.fontMetrics().lineSpacing())
 
     window.splitter.setSizes([400, 180])
@@ -448,6 +448,14 @@ def test_save_keeps_draft_when_tags_cannot_be_reloaded(workspace, tmp_comic, qtb
         assert workspace.leTitle.text() == "Edited title"
     finally:
         workspace.clear_dirty_flag()
+
+
+def test_portrait_cover_uses_the_available_editor_height(workspace, tmp_comic, qtbot):
+    workspace.resize(1100, 800)
+    workspace.open_file_event(QtCore.QUrl.fromLocalFile(str(tmp_comic.path)))
+    cover = workspace.archiveCoverWidget
+    qtbot.waitUntil(lambda: cover.comic_archive is not None and cover.page_loader is None)
+    assert cover.scene.sceneRect().height() >= 320
 
 
 def test_archive_pane_keeps_a_complete_row_in_a_compact_window(workspace, tmp_comic, qtbot):
