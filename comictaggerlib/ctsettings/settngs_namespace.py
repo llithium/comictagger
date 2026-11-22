@@ -54,7 +54,8 @@ class SettngsNS(settngs.TypedNS):
     internal__window_height: int
     internal__window_x: int
     internal__window_y: int
-    internal__archive_list_height: int
+    internal__file_list_width: int
+    internal__file_list_view: str
     internal__cover_sidebar_width: int
     internal__form_width: int
     internal__list_width: int
@@ -185,7 +186,8 @@ class internal(typing.TypedDict):
     window_height: int
     window_x: int
     window_y: int
-    archive_list_height: int
+    file_list_width: int
+    file_list_view: str
     cover_sidebar_width: int
     form_width: int
     list_width: int

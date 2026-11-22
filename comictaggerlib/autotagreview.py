@@ -27,6 +27,7 @@ from comictaggerlib.md import parse_archive_filename, prepare_metadata, read_con
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.resulttypes import Action, IssueResult, MatchStatus, OnlineMatchResults, Result, Status
 from comictaggerlib.searchpanel import SearchPanel, query_from_metadata
+from comictaggerlib.workspacestyle import DEFAULT_COLORS, Painter, ThumbnailCache, chip, section_label, set_property
 from comictalker.comictalker import ComicTalker, TalkerError
 
 logger = logging.getLogger(__name__)
@@ -208,22 +209,6 @@ def _shortcut(widget: QtWidgets.QWidget, keys: str, slot: Callable[[], object]) 
 
 
 # Light palette; the main window replaces it with the workspace theme (light or dark).
-DEFAULT_COLORS = {
-    "canvas": "#f1f2f5",
-    "surface": "#ffffff",
-    "ink": "#1f2330",
-    "muted": "#5d6473",
-    "edge": "#d9dce3",
-    "accent": "#2f5bd3",
-    "selection": "#dbe5fb",
-    "ok": "#1f8a4c",
-    "okSoft": "#e2f4ea",
-    "warn": "#9a5c00",
-    "warnSoft": "#fdf0d9",
-    "bad": "#c23b3b",
-    "badSoft": "#fbe5e5",
-}
-
 OUTCOME_TONES = {
     Outcome.needs_review: "warn",
     Outcome.no_match: "bad",
@@ -234,81 +219,12 @@ OUTCOME_TONES = {
 _ITEM_ROLE = QtCore.Qt.ItemDataRole.UserRole
 
 
-def _set_property(widget: QtWidgets.QWidget, name: str, value: object) -> None:
-    """Change a property that the stylesheet selects on, and repaint with the new style."""
-    if widget.property(name) == value:
-        return
-    widget.setProperty(name, value)
-    style = widget.style()
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
-
-
-def _chip(text: str = "", tone: str = "warn") -> QtWidgets.QLabel:
-    label = QtWidgets.QLabel(text)
-    label.setObjectName("chip")
-    label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-    label.setProperty("tone", tone)
-    label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
-    return label
-
-
-def _section(text: str) -> QtWidgets.QLabel:
-    label = QtWidgets.QLabel(text.upper())
-    label.setObjectName("sectionLabel")
-    return label
-
-
-class _Painter:
-    """Shared drawing helpers for the review's list delegates."""
-
-    def __init__(self, panel: AutoTagReviewPanel) -> None:
-        self.panel = panel
-
-    def color(self, name: str) -> QtGui.QColor:
-        return QtGui.QColor(self.panel.colors.get(name, DEFAULT_COLORS[name]))
-
-    def background(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, inset: int) -> None:
-        rect = QtCore.QRectF(option.rect.adjusted(inset, 1, -inset, -1))
-        state = option.state
-        if state & QtWidgets.QStyle.StateFlag.State_Selected:
-            painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.setBrush(self.color("selection"))
-            painter.drawRoundedRect(rect, 6, 6)
-        elif state & QtWidgets.QStyle.StateFlag.State_MouseOver:
-            hover = self.color("selection")
-            hover.setAlpha(110)
-            painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.setBrush(hover)
-            painter.drawRoundedRect(rect, 6, 6)
-        if state & QtWidgets.QStyle.StateFlag.State_HasFocus:
-            pen = QtGui.QPen(self.color("accent"))
-            pen.setWidthF(1.5)
-            painter.setPen(pen)
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
-
-    def chip(self, painter: QtGui.QPainter, x: float, y: float, text: str, tone: str, font: QtGui.QFont) -> None:
-        small = QtGui.QFont(font)
-        small.setPointSizeF(max(font.pointSizeF() * 0.85, 7))
-        small.setBold(True)
-        metrics = QtGui.QFontMetricsF(small)
-        rect = QtCore.QRectF(x, y, metrics.horizontalAdvance(text) + 16, metrics.height() + 4)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(self.color(tone + "Soft"))
-        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
-        painter.setPen(self.color(tone))
-        painter.setFont(small)
-        painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
-
-
 class GroupDelegate(QtWidgets.QStyledItemDelegate):
     """Sidebar rows: a coloured dot, the group name and its count."""
 
     def __init__(self, panel: AutoTagReviewPanel) -> None:
         super().__init__(panel)
-        self.draw = _Painter(panel)
+        self.draw = Painter(panel)
 
     def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
         return QtCore.QSize(160, option.fontMetrics.height() + 14)
@@ -344,7 +260,7 @@ class FileDelegate(QtWidgets.QStyledItemDelegate):
     def __init__(self, panel: AutoTagReviewPanel) -> None:
         super().__init__(panel)
         self.panel = panel
-        self.draw = _Painter(panel)
+        self.draw = Painter(panel)
 
     def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
         return QtCore.QSize(260, max(60, option.fontMetrics.height() * 2 + 26))
@@ -359,18 +275,7 @@ class FileDelegate(QtWidgets.QStyledItemDelegate):
         self.draw.background(painter, option, 4)
         rect = option.rect.adjusted(12, 7, -10, -7)
         thumb_rect = QtCore.QRect(rect.left(), rect.top(), int(rect.height() * 2 / 3), rect.height())
-        pixmap = self.panel.thumbnail(item.archive)
-        if pixmap is not None and not pixmap.isNull():
-            scaled = pixmap.scaled(
-                thumb_rect.size(),
-                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
-            painter.setClipRect(thumb_rect)
-            painter.drawPixmap(thumb_rect.topLeft(), scaled)
-            painter.setClipping(False)
-        else:
-            painter.fillRect(thumb_rect, self.draw.color("edge"))
+        self.draw.thumbnail(painter, thumb_rect, self.panel.thumbnail(item.archive))
         text_left = thumb_rect.right() + 10
         font = QtGui.QFont(option.font)
         font.setWeight(QtGui.QFont.Weight.DemiBold)
@@ -418,7 +323,7 @@ class CandidateCard(QtWidgets.QFrame):
         meta.setObjectName("cardMeta")
         meta.setWordWrap(True)
         meta.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        rank = _chip("Best guess" if best else f"Match {index + 1}", "acc" if best else "muted")
+        rank = chip("Best guess" if best else f"Match {index + 1}", "acc" if best else "muted")
 
         text = QtWidgets.QVBoxLayout()
         text.setSpacing(3)
@@ -438,7 +343,7 @@ class CandidateCard(QtWidgets.QFrame):
         self.cover.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
     def set_selected(self, selected: bool) -> None:
-        _set_property(self, "selected", selected)
+        set_property(self, "selected", selected)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent | None) -> None:
         self.clicked.emit(self.index)
@@ -528,7 +433,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self._outcome = Outcome.needs_review
         self._current_md = GenericMetadata()
         self._run_archives: list[ComicArchive] = []
-        self._thumbs: dict[pathlib.Path, QtGui.QPixmap] = {}
+        self._thumbs = ThumbnailCache(self)
         self.running = False
 
         # ----- sidebar -----
@@ -555,12 +460,12 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 10)
         sidebar_layout.setSpacing(0)
-        sidebar_layout.addWidget(_section("This run"))
+        sidebar_layout.addWidget(section_label("This run"))
         sidebar_layout.addWidget(self.categoryList, 1)
         sidebar_layout.addWidget(self.attributionLabel)
 
         # ----- file list -----
-        self.listHeading = _section("")
+        self.listHeading = section_label("")
         self.fileList = QtWidgets.QListWidget()
         self.fileList.setObjectName("reviewFiles")
         self.fileList.setAccessibleName("Archives in group")
@@ -568,6 +473,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.fileList.setMouseTracking(True)
         self.fileList.setUniformItemSizes(True)
         self.fileList.currentRowChanged.connect(self._file_changed)
+        self._thumbs.changed.connect(self.fileList.viewport().update)
         self.fileList.itemDoubleClicked.connect(lambda _item: self.open_current())
 
         files = QtWidgets.QWidget()
@@ -583,7 +489,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.heading = QtWidgets.QLabel()
         self.heading.setObjectName("reviewHeading")
         self.heading.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        self.reasonLabel = _chip()
+        self.reasonLabel = chip()
         self.positionLabel = QtWidgets.QLabel()
         self.positionLabel.setObjectName("positionLabel")
         self.positionLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
@@ -791,19 +697,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.fileList.viewport().update()
 
     def thumbnail(self, archive: ComicArchive) -> QtGui.QPixmap | None:
-        if archive.path not in self._thumbs:
-            pixmap = QtGui.QPixmap()
-            try:
-                data = archive.get_page(0)
-                image = QtGui.QImage.fromData(data) if data else QtGui.QImage()
-                if not image.isNull():
-                    pixmap = QtGui.QPixmap.fromImage(
-                        image.scaledToHeight(120, QtCore.Qt.TransformationMode.SmoothTransformation)
-                    )
-            except Exception:
-                logger.debug("No thumbnail for %s", archive.path, exc_info=True)
-            self._thumbs[archive.path] = pixmap
-        return self._thumbs[archive.path]
+        return self._thumbs.get(archive.path)
 
     # ----- data -----
 
@@ -988,7 +882,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             return False
         if item.result is not None:
             item.result.md = md
-        self._thumbs.pop(item.archive.path, None)
+        self._thumbs.forget(item.archive.path)
         self.resolve(item, resolution)
         self.matchesWritten.emit([item.archive])
         return True
@@ -1105,7 +999,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.detailStack.setCurrentWidget(self.detail)
         self.heading.setText(item.name)
         self.reasonLabel.setText(item.reason)
-        _set_property(self.reasonLabel, "tone", "ok" if item.resolution else OUTCOME_TONES[item.outcome])
+        set_property(self.reasonLabel, "tone", "ok" if item.resolution else OUTCOME_TONES[item.outcome])
         self.positionLabel.setText(f"{row + 1} of {self.fileList.count()}")
         self.archiveCover.set_archive(item.archive)
 

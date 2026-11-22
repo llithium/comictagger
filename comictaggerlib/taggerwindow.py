@@ -52,6 +52,7 @@ from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.crediteditorwindow import CreditEditorWindow
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.draftreview import DraftReview
+from comictaggerlib.editorchrome import EditorHeader, FormCards, SaveBar
 from comictaggerlib.exportwindow import ExportConfig, ExportConflictOpts, ExportWindow
 from comictaggerlib.fileselectionlist import FileSelectionList
 from comictaggerlib.graphics import graphics_path
@@ -193,7 +194,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.page_list_editor = PageListEditor(self.tabPages)
         grid_layout = QtWidgets.QGridLayout(self.tabPages)
-        grid_layout.addWidget(self.page_list_editor)
+        # Scroll the page editor when the form is narrow, so it doesn't set the whole window's minimum width.
+        pages_scroll = QtWidgets.QScrollArea(self.tabPages)
+        pages_scroll.setObjectName("pagesScroll")
+        pages_scroll.setWidgetResizable(True)
+        pages_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        pages_scroll.setWidget(self.page_list_editor)
+        grid_layout.addWidget(pages_scroll)
 
         self.fileSelectionList = FileSelectionList(
             self.widgetListHolder, self.config[0], self.dirty_flag_verification, self.review_blank_draft
@@ -351,8 +358,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Failed to load comics", "", trace_back)
 
         self.set_app_position()
-        list_height = self.config[0].internal__archive_list_height
-        self.splitter.setSizes([max(1, self.splitter.height() - list_height), list_height])
+        list_width = self.config[0].internal__file_list_width
+        self.splitter.setSizes([list_width, max(1, self.splitter.width() - list_width)])
         self.raise_()
         QtCore.QCoreApplication.processEvents()
 
@@ -412,9 +419,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         for combo in (self.cbLanguage, self.cbCountry, self.cbx_sources):
             combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.currentTextChanged.connect(combo.setToolTip)
+        # The file list sits on the left of the cover and form, the full height of the window.
+        self.splitter.setOrientation(QtCore.Qt.Orientation.Horizontal)
+        self.splitter.insertWidget(0, self.widgetListHolder)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.widgetListHolder.setMinimumWidth(220)
         self.widgetListHolder.layout().setContentsMargins(0, 0, 0, 0)
         self.fileSelectionList.layout().setContentsMargins(0, 0, 0, 0)
         self.tabWidget.tabBar().setDrawBase(False)
@@ -429,7 +440,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             button.setAccessibleName(name)
             button.setToolTip(name)
         self.toolBar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.toolBar.widgetForAction(self.actionWrite_Tags).setObjectName("saveTags")
+        # Save tags lives in the save bar under the form (and the File menu), not the toolbar.
+        self.toolBar.removeAction(self.actionWrite_Tags)
+        self.setup_editor_chrome()
         self.toolBar.insertSeparator(self.actionSearchOnline)
         self.toolBar.insertSeparator(self.actionPageBrowser)
         for action in self.toolBar.actions():
@@ -464,6 +477,103 @@ class TaggerWindow(QtWidgets.QMainWindow):
         welcome_layout.addWidget(blank, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.gridLayout.addWidget(self.welcome, 0, 0)
         self.apply_workspace_style()
+
+    def setup_editor_chrome(self) -> None:
+        """Put a header above the form tabs and a save bar below them, and split Details into cards."""
+        self.editorPane = QtWidgets.QWidget()
+        self.editorPane.setObjectName("editorPane")
+        index = self.editorSplitter.indexOf(self.tabWidget)
+        self.editorSplitter.replaceWidget(index, self.editorPane)
+        pane = QtWidgets.QVBoxLayout(self.editorPane)
+        pane.setContentsMargins(0, 0, 0, 0)
+        pane.setSpacing(0)
+        self.editorHeader = EditorHeader()
+        self.saveBar = SaveBar(self.actionWrite_Tags)
+        self.saveBar.btnRevert.clicked.connect(self.revert_form)
+        pane.addWidget(self.editorHeader)
+        pane.addWidget(self.tabWidget, 1)
+        pane.addWidget(self.saveBar)
+        self.editorSplitter.setStretchFactor(index, 1)
+
+        self.formCards = FormCards(
+            self.gridLayout_6,
+            [self.issueHeading, self.publicationHeading, self.classificationHeading, self.alternateHeading],
+            {field: label for field, (label, _text) in self.field_labels.items()},
+            self.scrollArea,
+        )
+        self.formCards.changed.connect(self._update_form_summary)
+
+        self.formSummary = QtWidgets.QLabel()
+        self.formSummary.setObjectName("formSummary")
+        # A tool button, not a checkbox, so clearing the form never resets it.
+        self.btnHideEmpty = QtWidgets.QToolButton()
+        self.btnHideEmpty.setObjectName("hideEmpty")
+        self.btnHideEmpty.setText("Hide empty fields")
+        self.btnHideEmpty.setCheckable(True)
+        self.btnHideEmpty.setToolTip("Show only the fields that have a value")
+        self.btnHideEmpty.toggled.connect(self.formCards.set_hide_empty)
+        self.editorHeader.add_tools([self.formSummary, self.btnHideEmpty])
+
+        def details_tools() -> None:
+            on_details = self.tabWidget.currentWidget() is self.tab
+            self.formSummary.setVisible(on_details)
+            self.btnHideEmpty.setVisible(on_details)
+
+        self.tabWidget.currentChanged.connect(lambda _index: details_tools())
+        for field in (
+            self.leSeries,
+            self.leIssueNum,
+            self.leIssueCount,
+            self.leVolumeNum,
+            self.lePubYear,
+            self.leTitle,
+        ):
+            field.textChanged.connect(self.update_editor_header)
+
+    def update_editor_header(self) -> None:
+        if not hasattr(self, "editorHeader"):
+            return
+        ca = self.comic_archive
+        series = self.leSeries.text().strip()
+        issue = self.leIssueNum.text().strip()
+        count = self.leIssueCount.text().strip()
+        if series:
+            title = f"{series} #{issue}" if issue else series
+            if issue and count:
+                title += f" of {count}"
+        elif ca is not None:
+            title = os.path.splitext(ca.path.name)[0]
+        else:
+            title = "New tags"
+        details = [self.leTitle.text().strip()]
+        if self.leVolumeNum.text().strip():
+            details.append(f"Volume {self.leVolumeNum.text().strip()}")
+        details.append(self.lePubYear.text().strip())
+        tag_names = ", ".join(
+            tags[tag].name() for tag in self.config[0].Runtime_Options__tags_write if tag in tags and tags[tag].enabled
+        )
+        read_only = ca is not None and not ca.is_writable()
+        self.editorHeader.show_comic(title, " · ".join(d for d in details if d), read_only, tag_names)
+        if read_only:
+            hint = "This file is read-only, so tags can't be saved to it."
+        elif self.dirty_flag:
+            hint = f"Saving writes {tag_names} tags." if tag_names else ""
+        else:
+            hint = "All changes saved." if ca is not None else ""
+        self.saveBar.set_state(self.dirty_flag, hint)
+
+    def _update_form_summary(self) -> None:
+        filled, total = self.formCards.totals()
+        self.formSummary.setText(f"{filled} of {total} fields filled")
+
+    def revert_form(self) -> None:
+        """Throw away the form's edits and reload the current archive's tags."""
+        archive = self.comic_archive
+        if archive is None or not self.dirty_flag:
+            return
+        self.clear_dirty_flag()
+        self.fileSelectionList.dirty_flag = False
+        self.load_archive(archive)
 
     def remember_cover_sidebar_width(self) -> None:
         self.config[0].internal__cover_sidebar_width = self.editorSplitter.sizes()[0]
@@ -520,7 +630,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
             style = sheet.read()
         font_size = self.fontInfo().pixelSize()
-        for name, scale in (("bodyText", 1.0), ("smallText", 0.92), ("headingText", 1.23), ("welcomeText", 2.15)):
+        for name, scale in (
+            ("bodyText", 1.0),
+            ("smallText", 0.92),
+            ("headingText", 1.23),
+            ("titleText", 1.6),
+            ("welcomeText", 2.15),
+        ):
             style = style.replace("@" + name, f"{round(font_size * scale)}px")
         style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
         # Longest names first, so "@okSoft" isn't half-replaced by "@ok".
@@ -532,6 +648,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.searchDock.setStyleSheet(style)
         if hasattr(self, "autoTagReview"):
             self.autoTagReview.set_colors(colors)
+        self.fileSelectionList.set_colors(colors)
         self.fileSelectionList.update_minimum_height()
 
     def enabled_tags(self) -> Sequence[str]:
@@ -580,7 +697,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def reset_app(self) -> None:
         if self.splitter.isVisible():
-            self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
+            self.config[0].internal__file_list_width = self.splitter.sizes()[0]
         self.archiveCoverWidget.clear()
         self.comic_archive = None
         self.dirty_flag = False
@@ -931,6 +1048,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         tag_list = ", ".join(tags[tag].name() for tag in ca.get_supported_tags() if ca.has_tags(tag))
         self.lblTagList.setText(f"Tags: {tag_list}" if tag_list else "")
+        self.update_editor_header()
+        self.formCards.apply_visibility()
 
     def set_dirty_flag(self) -> None:
         if not self.dirty_flag:
@@ -939,6 +1058,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if self.comic_archive is None:
                 self.update_menus()
             self.update_app_title()
+            self.update_editor_header()
 
     def clear_dirty_flag(self) -> None:
         if self.dirty_flag:
@@ -947,6 +1067,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if self.comic_archive is None:
                 self.update_menus()
             self.update_app_title()
+            self.update_editor_header()
 
     def connect_dirty_flag_signals(self) -> None:
         # recursively connect the tab form child slots
@@ -1603,6 +1724,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_credit_colors()
         self.page_list_editor.select_write_tags(self.config[0].Runtime_Options__tags_write)
         self.toggle_enable_embedding_hashes()
+        if hasattr(self, "formCards"):
+            self.formCards.apply_visibility()
 
     def add_credit(self) -> None:
         row = self.twCredits.rowCount()
@@ -2409,7 +2532,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.config[0].internal__window_x = self.x()
             self.config[0].internal__window_y = self.y()
             if self.splitter.isVisible():
-                self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
+                self.config[0].internal__file_list_width = self.splitter.sizes()[0]
             (
                 self.config[0].internal__sort_column,
                 self.config[0].internal__sort_direction,

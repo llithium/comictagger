@@ -13,8 +13,8 @@ QWidget#welcome QPushButton#blankEditor { color: @accent; background: transparen
 QWidget#welcome QPushButton:focus, QWidget#welcome QPushButton#blankEditor:focus, QToolBar QToolButton:focus { border-color: palette(highlight); }
 QLabel#lblFilename { color: @ink; font-size: @headingText; font-weight: bold; }
 QLabel#lblArchiveType, QLabel#lblPageCount, QLabel#lblTagList { color: @muted; font-style: normal; }
-QTabWidget#tabWidget::pane, QWidget#scrollAreaWidgetContents { background: @surface; }
-QTabWidget#tabWidget::pane { border: 1px solid @edge; border-radius: 5px; }
+QTabWidget#tabWidget::pane, QWidget#scrollAreaWidgetContents { background: @canvas; }
+QTabWidget#tabWidget::pane { border: 0; border-top: 1px solid @edge; }
 QTabWidget#tabWidget QTabBar::tab { background: transparent; color: @muted; padding: 7px 16px; border: 1px solid transparent; border-bottom-width: 2px; }
 QTabWidget#tabWidget QTabBar::tab:selected { color: @accent; border-bottom-color: @accent; font-weight: bold; }
 QTabWidget#tabWidget QTabBar::tab:selected:focus { border-color: palette(highlight); }
@@ -22,7 +22,7 @@ QTabWidget#tabWidget QTabBar::tab:hover { background: @wash; }
 QWidget#scrollAreaWidgetContents QLabel { color: @muted; font-size: @smallText; }
 QWidget#scrollAreaWidgetContents QLabel#issueHeading, QWidget#scrollAreaWidgetContents QLabel#publicationHeading,
 QWidget#scrollAreaWidgetContents QLabel#classificationHeading, QWidget#scrollAreaWidgetContents QLabel#alternateHeading {
-    font-size: @headingText; font-weight: bold; color: @ink; padding-top: 6px;
+    font-size: @headingText; font-weight: bold; color: @ink;
 }
 QWidget#scrollAreaWidgetContents QLineEdit, QWidget#scrollAreaWidgetContents QComboBox {
     background: @surface; color: @ink; border: 1px solid @fieldBorder; border-radius: 4px; padding: 3px 6px; min-height: 17px;
@@ -117,3 +117,46 @@ QWidget#searchPanel QTableWidget { background: @surface; color: @ink; border: 1p
 QWidget#searchPanel QTableWidget::item { padding: 4px 8px; }
 QDockWidget#searchDock { color: @ink; }
 QDockWidget#searchDock > QWidget { background: @surface; }
+
+/* ----- Editor: file list cards, header, carded form and save bar ----- */
+QTableWidget#twList[cards="true"] { border: 0; background: @surface; selection-background-color: transparent; }
+QWidget#widgetListHolder { background: @surface; border-right: 1px solid @edge; }
+QLineEdit#fileFilter { background: @canvas; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 5px 8px; }
+QLineEdit#fileFilter:focus { border-color: @accent; }
+QComboBox#fileSort { background: transparent; color: @muted; border: 0; padding: 2px 4px; font-size: @smallText; }
+QToolButton#viewToggle { background: @surface; color: @muted; border: 1px solid @edge; padding: 4px 9px; font-size: @smallText; font-weight: bold; }
+QToolButton#viewToggle:checked { background: @wash; color: @ink; }
+QToolButton#viewToggle:focus { border-color: palette(highlight); }
+
+QWidget#editorPane { background: @canvas; }
+QWidget#editorHeader { background: @canvas; }
+QLabel#editorTitle { color: @ink; font-size: @titleText; font-weight: bold; }
+QLabel#editorSubtitle { color: @muted; }
+QLabel#formSummary { color: @muted; font-size: @smallText; }
+QToolButton#hideEmpty { background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 3px 9px; font-size: @smallText; }
+QToolButton#hideEmpty:checked { background: @accSoft; color: @accent; border-color: @accent; }
+QFrame#formCard { background: @surface; border: 1px solid @edge; border-radius: 8px; }
+QFrame#formCard QLabel#cardCount { color: @muted; font-size: @smallText; }
+
+QWidget#saveBar { background: @surface; border-top: 1px solid @edge; }
+QLabel#saveHint { color: @muted; font-size: @smallText; }
+QWidget#saveBar QPushButton { background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 6px 14px; font-size: @bodyText; }
+QWidget#saveBar QPushButton:hover { background: @wash; }
+QWidget#saveBar QPushButton:focus { border-color: palette(highlight); }
+QWidget#saveBar QPushButton:disabled { color: @muted; background: @canvas; }
+QWidget#saveBar QPushButton[primary="true"]:enabled { background: @accent; border-color: @accent; color: @onAccent; font-weight: bold; }
+
+QWidget#tab_2 QTableWidget, QWidget#tab_3 QTextEdit, QWidget#tab_3 QListWidget, QWidget#tab_4 QTextEdit,
+QWidget#tab_2 QLineEdit, QWidget#tab_3 QDoubleSpinBox {
+    background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px;
+}
+QWidget#tab_2 QLabel, QWidget#tab_3 QLabel, QWidget#tab_4 QLabel { color: @muted; }
+QWidget#tab_2 QPushButton, QWidget#tab_3 QPushButton {
+    background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 5px 12px;
+}
+QWidget#tab_2 QPushButton:hover, QWidget#tab_3 QPushButton:hover { background: @wash; }
+QWidget#coverSidebar QLabel#lbl_md_source, QWidget#coverSidebar QLabel#lbl_read_style, QWidget#coverSidebar QLabel#lbl_modify_style,
+QWidget#coverImageContainer QLabel { color: @muted; }
+QWidget#coverSidebar QComboBox { background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 3px 20px 3px 8px; }
+QWidget#coverSidebar QComboBox::drop-down { border: 0; width: 20px; }
+QWidget#coverSidebar QComboBox::down-arrow { image: url("@chevron"); width: 12px; height: 8px; }

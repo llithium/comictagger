@@ -36,6 +36,7 @@ from comictaggerlib.resulttypes import OnlineMatchResults
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
 from comictaggerlib.ui.rarhelp import LINUX_RAR_HELP, MAC_RAR_HELP, WINDOWS_RAR_HELP
+from comictaggerlib.workspacestyle import DEFAULT_COLORS, Painter, ThumbnailCache
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,70 @@ class PathLoadThread(QtCore.QThread):
             logger.exception("Failed while loading comic paths")
             if not self.isInterruptionRequested():
                 self.error.emit(error)
+
+
+# Auto-Tag outcomes shown in the Match column, and the chip colour each gets in the card view.
+MATCH_TONES = {
+    "Matched": "ok",
+    "Manual match": "ok",
+    "Search match": "ok",
+    "Fixed by hand": "ok",
+    "Multiple": "warn",
+    "Low confidence": "warn",
+    "No match": "bad",
+    "Fetch error": "bad",
+    "Write error": "bad",
+    "Read error": "bad",
+}
+
+
+class FileCardDelegate(QtWidgets.QStyledItemDelegate):
+    """Card rows for the file list: a cover thumbnail, the file name and status chips."""
+
+    def __init__(self, file_list: FileSelectionList) -> None:
+        super().__init__(file_list)
+        self.file_list = file_list
+        self.draw = Painter(file_list)
+
+    def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
+        return QtCore.QSize(220, self.file_list.card_height())
+
+    def paint(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> None:
+        archive: ComicArchive | None = index.data(QtCore.Qt.ItemDataRole.UserRole)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        painter.fillRect(option.rect, self.draw.color("surface"))
+        self.draw.background(painter, option, 4)
+        rect = option.rect.adjusted(12, 7, -10, -7)
+        thumb = QtCore.QRect(rect.left(), rect.top(), int(rect.height() * 2 / 3), rect.height())
+        self.draw.thumbnail(painter, thumb, self.file_list.thumbs.get(archive.path) if archive else None)
+        left = thumb.right() + 10
+        font = QtGui.QFont(option.font)
+        font.setWeight(QtGui.QFont.Weight.DemiBold)
+        metrics = QtGui.QFontMetrics(font)
+        painter.setFont(font)
+        painter.setPen(self.draw.color("ink"))
+        name = metrics.elidedText(str(index.data() or ""), QtCore.Qt.TextElideMode.ElideMiddle, rect.right() - left)
+        painter.drawText(left, rect.top() + metrics.ascent() + 2, name)
+        x = float(left)
+        y = rect.top() + metrics.height() + 8
+        for text, tone in self.file_list.statuses(index.row()):
+            if x > rect.right() - 30:
+                break
+            x += self.draw.chip(painter, x, y, text, tone, option.font) + 6
+        kind = str(index.siblingAtColumn(FileSelectionList.typeColNum).data() or "")
+        if kind and x < rect.right() - 30:
+            small = QtGui.QFont(option.font)
+            small.setPointSizeF(max(option.font.pointSizeF() * 0.85, 7))
+            painter.setFont(small)
+            painter.setPen(self.draw.color("muted"))
+            painter.drawText(
+                QtCore.QRectF(x, y, rect.right() - x, QtGui.QFontMetricsF(small).height() + 4),
+                QtCore.Qt.AlignmentFlag.AlignVCenter,
+                kind,
+            )
+        painter.restore()
 
 
 class FileSelectionList(QtWidgets.QWidget):
@@ -160,13 +225,192 @@ class FileSelectionList(QtWidgets.QWidget):
         self.path_load_dialogs: dict[PathLoadThread, QtWidgets.QProgressDialog] = {}
         self._verifying_draft_transition = False
         self._deferred_path_loads: list[list[PreparedPathItem]] = []
+        self._setup_card_view()
+
+    # ----- card view -----
+
+    SORT_CHOICES = (
+        ("Name", fileColNum),
+        ("Folder", folderColNum),
+        ("Tags", MDFlagColNum),
+        ("Type", typeColNum),
+        ("Read-only", readonlyColNum),
+        ("Auto-Tag result", matchColNum),
+    )
+
+    def _setup_card_view(self) -> None:
+        self.colors = dict(DEFAULT_COLORS)
+        self.thumbs = ThumbnailCache(self, 112)
+        self.thumbs.changed.connect(self.twList.viewport().update)
+        self.card_delegate = FileCardDelegate(self)
+        self.table_delegate = QtWidgets.QStyledItemDelegate(self)
+        self.twList.setMouseTracking(True)
+
+        self.listTitle = QtWidgets.QLabel("FILES")
+        self.listTitle.setObjectName("sectionLabel")
+        self.sortBox = QtWidgets.QComboBox()
+        self.sortBox.setObjectName("fileSort")
+        self.sortBox.setAccessibleName("Sort files")
+        for label, column in self.SORT_CHOICES:
+            self.sortBox.addItem(f"Sort: {label}", column)
+        self.sortBox.activated.connect(self._sort_chosen)
+        self.twList.horizontalHeader().sortIndicatorChanged.connect(self._sort_indicator_changed)
+
+        self.filterEdit = QtWidgets.QLineEdit()
+        self.filterEdit.setObjectName("fileFilter")
+        self.filterEdit.setPlaceholderText("Filter files")
+        self.filterEdit.setClearButtonEnabled(True)
+        self.filterEdit.setAccessibleName("Filter files")
+        self.filterEdit.textChanged.connect(self.apply_filter)
+
+        self.btnCards = QtWidgets.QToolButton()
+        self.btnTable = QtWidgets.QToolButton()
+        group = QtWidgets.QButtonGroup(self)
+        for button, text, tip in (
+            (self.btnCards, "Cards", "Show files as cards with covers"),
+            (self.btnTable, "Table", "Show files as a table with columns"),
+        ):
+            button.setText(text)
+            button.setToolTip(tip)
+            button.setCheckable(True)
+            button.setObjectName("viewToggle")
+            group.addButton(button)
+        self.btnCards.toggled.connect(self._view_toggled)
+
+        top = QtWidgets.QHBoxLayout()
+        top.setContentsMargins(4, 2, 0, 0)
+        top.addWidget(self.listTitle, 1)
+        top.addWidget(self.sortBox)
+        tools = QtWidgets.QHBoxLayout()
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(6)
+        tools.addWidget(self.filterEdit, 1)
+        toggle = QtWidgets.QHBoxLayout()
+        toggle.setSpacing(0)
+        toggle.addWidget(self.btnCards)
+        toggle.addWidget(self.btnTable)
+        tools.addLayout(toggle)
+
+        outer = self.layout()
+        assert outer is not None
+        outer.removeWidget(self.twList)
+        column = QtWidgets.QVBoxLayout()
+        column.setSpacing(8)
+        column.addLayout(top)
+        column.addLayout(tools)
+        column.addWidget(self.twList, 1)
+        cast(QtWidgets.QBoxLayout, outer).addLayout(column)
+
+        self.card_view = False
+        cards = getattr(self.config, "internal__file_list_view", "cards") != "table"
+        (self.btnCards if cards else self.btnTable).setChecked(True)
+        self.set_card_view(cards)
+        # Rows are filled in after they're inserted, so update the title once the batch is done.
+        self._title_timer = QtCore.QTimer(self)
+        self._title_timer.setSingleShot(True)
+        self._title_timer.setInterval(0)
+        self._title_timer.timeout.connect(self._rows_changed)
+        self.twList.model().rowsInserted.connect(self._title_timer.start)
+        self.twList.model().rowsRemoved.connect(self._title_timer.start)
+
+    def _view_toggled(self, cards: bool) -> None:
+        self.set_card_view(cards)
+
+    def card_height(self) -> int:
+        return max(64, self.twList.fontMetrics().height() * 2 + 30)
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors = dict(colors)
+        self.twList.viewport().update()
+
+    def set_card_view(self, cards: bool) -> None:
+        """Switch between cover cards (one column) and the full table of columns."""
+        if cards == self.card_view and self.twList.itemDelegateForColumn(self.fileColNum) is not None:
+            return
+        self.card_view = cards
+        if hasattr(self.config, "internal__file_list_view"):
+            self.config.internal__file_list_view = "cards" if cards else "table"
+        header = self.twList.horizontalHeader()
+        rows = self.twList.verticalHeader()
+        for column in range(1, self.twList.columnCount()):
+            self.twList.setColumnHidden(column, cards)
+        header.setVisible(not cards)
+        if cards:
+            self.twList.setItemDelegateForColumn(self.fileColNum, self.card_delegate)
+            header.setSectionResizeMode(self.fileColNum, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            rows.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Fixed)
+            rows.setDefaultSectionSize(self.card_height())
+            self.twList.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        else:
+            self.twList.setItemDelegateForColumn(self.fileColNum, self.table_delegate)
+            header.setSectionResizeMode(self.fileColNum, QtWidgets.QHeaderView.ResizeMode.Interactive)
+            self.twList.setColumnWidth(self.fileColNum, 70 * self.twList.fontMetrics().averageCharWidth())
+            rows.setDefaultSectionSize(self.twList.fontMetrics().height() + 10)
+            self.twList.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.twList.setProperty("cards", cards)
+        style = self.twList.style()
+        if style is not None:
+            style.unpolish(self.twList)
+            style.polish(self.twList)
+        self.update_minimum_height()
+
+    def statuses(self, row: int) -> list[tuple[str, str]]:
+        """The chips a card shows for a row: unsaved edits, read-only, the Auto-Tag result and tags."""
+        chips: list[tuple[str, str]] = []
+        if self.dirty_flag and row == self.twList.currentRow():
+            chips.append(("Unsaved", "acc"))
+        readonly = self.twList.item(row, self.readonlyColNum)
+        if readonly is not None and readonly.data(QtCore.Qt.ItemDataRole.UserRole):
+            chips.append(("Read-only", "bad"))
+        match = self.twList.item(row, self.matchColNum)
+        match_text = match.text() if match is not None else ""
+        if match_text:
+            chips.append((match_text, MATCH_TONES.get(match_text, "warn")))
+        tagged = self.twList.item(row, self.MDFlagColNum)
+        if tagged is not None and tagged.text().strip():
+            if MATCH_TONES.get(match_text) != "ok":
+                chips.append(("Tagged", "ok"))
+        else:
+            chips.append(("No tags", "muted"))
+        return chips
+
+    def apply_filter(self, text: str | None = None) -> None:
+        needle = (self.filterEdit.text() if text is None else text).casefold().strip()
+        for row in range(self.twList.rowCount()):
+            item = self.twList.item(row, self.fileColNum)
+            hidden = bool(needle) and (item is None or needle not in item.text().casefold())
+            self.twList.setRowHidden(row, hidden)
+
+    def _rows_changed(self) -> None:
+        archives = [ca for row in range(self.twList.rowCount()) if (ca := self.get_archive_by_row(row)) is not None]
+        folders = {ca.path.parent for ca in archives}
+        name = next(iter(folders)).name if len(folders) == 1 else "Files"
+        self.listTitle.setText(f"{name} · {len(archives)}".upper() if archives else "FILES")
+        self.listTitle.setToolTip(str(next(iter(folders))) if len(folders) == 1 else "")
+        if self.filterEdit.text():
+            self.apply_filter()
+
+    def _sort_chosen(self, index: int) -> None:
+        column = int(self.sortBox.itemData(index))
+        order = QtCore.Qt.SortOrder.AscendingOrder
+        if column == self.twList.horizontalHeader().sortIndicatorSection():
+            # Choosing the current column again flips the direction, like clicking a header.
+            current = self.twList.horizontalHeader().sortIndicatorOrder()
+            if current == QtCore.Qt.SortOrder.AscendingOrder:
+                order = QtCore.Qt.SortOrder.DescendingOrder
+        self.set_sorting(column, order)
+
+    def _sort_indicator_changed(self, column: int, _order: QtCore.Qt.SortOrder) -> None:
+        index = self.sortBox.findData(column)
+        if index >= 0:
+            self.sortBox.setCurrentIndex(index)
 
     def update_minimum_height(self) -> None:
         table = self.twList
         scrollbar = table.horizontalScrollBar()
         height = (
             2 * table.frameWidth()
-            + table.horizontalHeader().sizeHint().height()
+            + (0 if table.horizontalHeader().isHidden() else table.horizontalHeader().sizeHint().height())
             + table.verticalHeader().defaultSectionSize()
         )
         if scrollbar.maximum() > 0:
@@ -270,6 +514,7 @@ class FileSelectionList(QtWidgets.QWidget):
 
     def set_modified_flag(self, modified: bool) -> None:
         self.dirty_flag = modified
+        self.twList.viewport().update()
 
     def select_all(self) -> None:
         self.twList.setRangeSelected(
