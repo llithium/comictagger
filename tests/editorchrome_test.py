@@ -34,6 +34,10 @@ def test_card_view_shows_status_chips_filters_and_switches_to_table(tmp_path, co
     file_list.twList.item(row, file_list.MDFlagColNum).setText("")
     file_list.twList.item(row, file_list.matchColNum).setText("No match")
     assert file_list.statuses(row) == [("No match", "bad"), ("No tags", "muted")]
+    # Cards lead with series and issue parsed from the name, and keep the file name on the second line.
+    titles = {file_list.card_text(r) for r in range(file_list.twList.rowCount())}
+    assert ("Saga #2", "Saga 002.cbz") in titles
+    assert ("Paper Girls #12", "Paper Girls 012.cbz") in titles
     file_list.twList.selectRow(row)
     file_list.set_modified_flag(True)
     assert file_list.statuses(row)[0] == ("Unsaved", "acc")
@@ -46,9 +50,13 @@ def test_card_view_shows_status_chips_filters_and_switches_to_table(tmp_path, co
     }
     assert visible == {"Saga 001.cbz", "Saga 002.cbz"}
 
-    file_list.sortBox.setCurrentIndex(file_list.sortBox.findData(file_list.folderColNum))
-    file_list.sortBox.activated.emit(file_list.sortBox.currentIndex())
+    folder = next(a for a in file_list.sortActions.actions() if a.data() == file_list.folderColNum)
+    folder.trigger()
     assert file_list.get_sorting()[0] == file_list.folderColNum
+    assert file_list.sortButton.text() == "Sort: Folder ↑"
+    file_list.descendingAction.trigger()
+    assert file_list.get_sorting() == (file_list.folderColNum, QtCore.Qt.SortOrder.DescendingOrder.value)
+    assert file_list.sortButton.text() == "Sort: Folder ↓"
 
     file_list.btnTable.click()
     assert not file_list.card_view
@@ -124,3 +132,18 @@ def test_file_list_sits_left_of_the_editor(workspace, tmp_comic, qtbot):
     assert workspace.editorSplitter.widget(1) is workspace.editorPane
     # The page editor scrolls instead of forcing the window wider than the file list leaves room for.
     assert workspace.tabWidget.minimumSizeHint().width() < 600
+
+
+def test_card_titles_wrap_to_two_lines_and_keep_the_issue_number(qtbot):
+    from PyQt6 import QtGui
+
+    from comictaggerlib.fileselectionlist import wrap_lines
+
+    metrics = QtGui.QFontMetrics(QtGui.QFont())
+    title = "Lady Mechanika - The Mechanical Menagerie #2 of 4"
+    width = metrics.horizontalAdvance(title) * 2 // 3
+    lines = wrap_lines(title, metrics, width, 2)
+    assert len(lines) == 2
+    assert lines[-1].endswith("#2 of 4")
+    assert all(metrics.horizontalAdvance(line) <= width for line in lines)
+    assert wrap_lines("Saga #2", metrics, width, 2) == ["Saga #2"]

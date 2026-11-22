@@ -29,6 +29,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, uic
 
 from comicapi import utils
 from comicapi.comicarchive import ComicArchive
+from comicapi.genericmetadata import GenericMetadata
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.graphics import graphics_path
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
@@ -36,7 +37,7 @@ from comictaggerlib.resulttypes import OnlineMatchResults
 from comictaggerlib.ui import ui_path
 from comictaggerlib.ui.qtutils import center_window_on_parent
 from comictaggerlib.ui.rarhelp import LINUX_RAR_HELP, MAC_RAR_HELP, WINDOWS_RAR_HELP
-from comictaggerlib.workspacestyle import DEFAULT_COLORS, Painter, ThumbnailCache
+from comictaggerlib.workspacestyle import DEFAULT_COLORS, ElidedLabel, Painter, ThumbnailCache
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,51 @@ class PathLoadThread(QtCore.QThread):
                 self.error.emit(error)
 
 
+class _CardInfoSignals(QtCore.QObject):
+    loaded = QtCore.pyqtSignal(str, str)
+
+
+class _CardInfoJob(QtCore.QRunnable):
+    """Reads an archive's tags off the main thread, for the series and issue a card shows."""
+
+    def __init__(self, path: pathlib.Path, config: ct_ns, signals: _CardInfoSignals) -> None:
+        super().__init__()
+        self.path = path
+        self.config = config
+        self.signals = signals
+
+    def run(self) -> None:
+        title = ""
+        try:
+            from comictaggerlib.md import read_configured_tags
+
+            archive = ComicArchive(self.path)
+            tag_ids = [tag for tag in self.config.Runtime_Options__tags_read if archive.has_tags(tag)]
+            if tag_ids:
+                metadata, _, _error = read_configured_tags(archive, tag_ids, self.config)
+                title = card_title(metadata)
+        except Exception:
+            logger.debug("Could not read tags for %s", self.path, exc_info=True)
+        try:
+            self.signals.loaded.emit(str(self.path), title)
+        except RuntimeError:
+            pass  # the list was closed while this archive was being read
+
+
+def card_title(metadata: GenericMetadata) -> str:
+    """'Series #Issue of Count', the way the editor's header names a comic."""
+    if not metadata.series:
+        return ""
+    title = metadata.series
+    if metadata.issue:
+        title += f" #{metadata.issue}"
+        if metadata.issue_count:
+            title += f" of {metadata.issue_count}"
+    elif metadata.volume:
+        title += f" v{metadata.volume}"
+    return title
+
+
 # Auto-Tag outcomes shown in the Match column, and the chip colour each gets in the card view.
 MATCH_TONES = {
     "Matched": "ok",
@@ -106,6 +152,27 @@ MATCH_TONES = {
     "Write error": "bad",
     "Read error": "bad",
 }
+
+
+def wrap_lines(text: str, metrics: QtGui.QFontMetrics, width: int, limit: int) -> list[str]:
+    """Break text into at most ``limit`` lines that fit ``width``, eliding the end of the last one."""
+    lines: list[str] = []
+    words = text.split(" ")
+    current = ""
+    while words:
+        candidate = f"{current} {words[0]}".strip()
+        if metrics.horizontalAdvance(candidate) <= width or not current:
+            current = candidate
+            words.pop(0)
+            continue
+        lines.append(current)
+        current = ""
+        if len(lines) == limit - 1:
+            break
+    rest = " ".join(([current] if current else []) + words).strip()
+    if rest:
+        lines.append(metrics.elidedText(rest, QtCore.Qt.TextElideMode.ElideRight, width))
+    return [metrics.elidedText(line, QtCore.Qt.TextElideMode.ElideRight, width) for line in lines[:limit]]
 
 
 class FileCardDelegate(QtWidgets.QStyledItemDelegate):
@@ -130,30 +197,40 @@ class FileCardDelegate(QtWidgets.QStyledItemDelegate):
         thumb = QtCore.QRect(rect.left(), rect.top(), int(rect.height() * 2 / 3), rect.height())
         self.draw.thumbnail(painter, thumb, self.file_list.thumbs.get(archive.path) if archive else None)
         left = thumb.right() + 10
-        font = QtGui.QFont(option.font)
-        font.setWeight(QtGui.QFont.Weight.DemiBold)
-        metrics = QtGui.QFontMetrics(font)
-        painter.setFont(font)
+        width = rect.right() - left
+        title, filename = self.file_list.card_text(index.row())
+
+        # Series and issue first, on up to two lines so the issue number at the end stays visible.
+        # When that fits on one line, the file name fills the second, so similar files stay distinguishable.
+        bold = QtGui.QFont(option.font)
+        bold.setWeight(QtGui.QFont.Weight.DemiBold)
+        bold_metrics = QtGui.QFontMetrics(bold)
+        painter.setFont(bold)
         painter.setPen(self.draw.color("ink"))
-        name = metrics.elidedText(str(index.data() or ""), QtCore.Qt.TextElideMode.ElideMiddle, rect.right() - left)
-        painter.drawText(left, rect.top() + metrics.ascent() + 2, name)
+        lines = wrap_lines(title, bold_metrics, width, 2)
+        y = rect.top() + bold_metrics.ascent()
+        for number, line in enumerate(lines):
+            painter.drawText(left, y, line)
+            if number + 1 < len(lines):
+                y += bold_metrics.lineSpacing()
+        small = QtGui.QFont(option.font)
+        small.setPointSizeF(max(option.font.pointSizeF() * 0.88, 7))
+        small_metrics = QtGui.QFontMetrics(small)
+        if len(lines) < 2 and filename != title:
+            painter.setFont(small)
+            painter.setPen(self.draw.color("muted"))
+            y += bold_metrics.descent() + 2 + small_metrics.ascent()
+            painter.drawText(left, y, small_metrics.elidedText(filename, QtCore.Qt.TextElideMode.ElideMiddle, width))
+            y += small_metrics.descent()
+        else:
+            y += bold_metrics.descent()
+
         x = float(left)
-        y = rect.top() + metrics.height() + 8
+        chip_top = y + 5
         for text, tone in self.file_list.statuses(index.row()):
             if x > rect.right() - 30:
                 break
-            x += self.draw.chip(painter, x, y, text, tone, option.font) + 6
-        kind = str(index.siblingAtColumn(FileSelectionList.typeColNum).data() or "")
-        if kind and x < rect.right() - 30:
-            small = QtGui.QFont(option.font)
-            small.setPointSizeF(max(option.font.pointSizeF() * 0.85, 7))
-            painter.setFont(small)
-            painter.setPen(self.draw.color("muted"))
-            painter.drawText(
-                QtCore.QRectF(x, y, rect.right() - x, QtGui.QFontMetricsF(small).height() + 4),
-                QtCore.Qt.AlignmentFlag.AlignVCenter,
-                kind,
-            )
+            x += self.draw.chip(painter, x, chip_top, text, tone, option.font) + 6
         painter.restore()
 
 
@@ -246,14 +323,30 @@ class FileSelectionList(QtWidgets.QWidget):
         self.table_delegate = QtWidgets.QStyledItemDelegate(self)
         self.twList.setMouseTracking(True)
 
-        self.listTitle = QtWidgets.QLabel("FILES")
-        self.listTitle.setObjectName("sectionLabel")
-        self.sortBox = QtWidgets.QComboBox()
-        self.sortBox.setObjectName("fileSort")
-        self.sortBox.setAccessibleName("Sort files")
+        self.listTitle = ElidedLabel()
+        self.listTitle.setObjectName("fileListTitle")
+        self.listTitle.set_full_text("FILES")
+        # A menu button rather than a combo box: a native combo pops up over the toolbar and clips its items.
+        self.sortButton = QtWidgets.QToolButton()
+        self.sortButton.setObjectName("fileSort")
+        self.sortButton.setAccessibleName("Sort files")
+        self.sortButton.setToolTip("Sort files")
+        self.sortButton.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.sortButton.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.sortMenu = QtWidgets.QMenu(self.sortButton)
+        self.sortMenu.addSection("Sort by")
+        self.sortActions = QtGui.QActionGroup(self)
         for label, column in self.SORT_CHOICES:
-            self.sortBox.addItem(f"Sort: {label}", column)
-        self.sortBox.activated.connect(self._sort_chosen)
+            action = self.sortMenu.addAction(label)
+            action.setCheckable(True)
+            action.setData(column)
+            self.sortActions.addAction(action)
+        self.sortMenu.addSeparator()
+        self.descendingAction = self.sortMenu.addAction("Descending")
+        self.descendingAction.setCheckable(True)
+        self.sortActions.triggered.connect(lambda action: self.sort_by(int(action.data())))
+        self.descendingAction.triggered.connect(self._descending_toggled)
+        self.sortButton.setMenu(self.sortMenu)
         self.twList.horizontalHeader().sortIndicatorChanged.connect(self._sort_indicator_changed)
 
         self.filterEdit = QtWidgets.QLineEdit()
@@ -278,9 +371,10 @@ class FileSelectionList(QtWidgets.QWidget):
         self.btnCards.toggled.connect(self._view_toggled)
 
         top = QtWidgets.QHBoxLayout()
-        top.setContentsMargins(4, 2, 0, 0)
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
         top.addWidget(self.listTitle, 1)
-        top.addWidget(self.sortBox)
+        top.addWidget(self.sortButton)
         tools = QtWidgets.QHBoxLayout()
         tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(6)
@@ -301,6 +395,13 @@ class FileSelectionList(QtWidgets.QWidget):
         column.addWidget(self.twList, 1)
         cast(QtWidgets.QBoxLayout, outer).addLayout(column)
 
+        self._card_titles: dict[str, str] = {}
+        self._card_pool = QtCore.QThreadPool(self)
+        self._card_pool.setMaxThreadCount(1)
+        self._card_signals = _CardInfoSignals(self)
+        self._card_signals.loaded.connect(self._card_title_loaded)
+        self._sort_indicator_changed(*self.get_sorting())
+
         self.card_view = False
         cards = getattr(self.config, "internal__file_list_view", "cards") != "table"
         (self.btnCards if cards else self.btnTable).setChecked(True)
@@ -317,7 +418,7 @@ class FileSelectionList(QtWidgets.QWidget):
         self.set_card_view(cards)
 
     def card_height(self) -> int:
-        return max(64, self.twList.fontMetrics().height() * 2 + 30)
+        return max(74, round(self.twList.fontMetrics().height() * 3.3) + 24)
 
     def set_colors(self, colors: dict[str, str]) -> None:
         self.colors = dict(colors)
@@ -378,32 +479,74 @@ class FileSelectionList(QtWidgets.QWidget):
         needle = (self.filterEdit.text() if text is None else text).casefold().strip()
         for row in range(self.twList.rowCount()):
             item = self.twList.item(row, self.fileColNum)
-            hidden = bool(needle) and (item is None or needle not in item.text().casefold())
+            archive = self.get_archive_by_row(row)
+            title = self._card_titles.get(str(archive.path), "") if archive is not None else ""
+            text = f"{item.text() if item is not None else ''} {title}".casefold()
+            hidden = bool(needle) and needle not in text
             self.twList.setRowHidden(row, hidden)
 
     def _rows_changed(self) -> None:
         archives = [ca for row in range(self.twList.rowCount()) if (ca := self.get_archive_by_row(row)) is not None]
         folders = {ca.path.parent for ca in archives}
         name = next(iter(folders)).name if len(folders) == 1 else "Files"
-        self.listTitle.setText(f"{name} · {len(archives)}".upper() if archives else "FILES")
+        self.listTitle.set_full_text(f"{name} · {len(archives)}".upper() if archives else "FILES")
         self.listTitle.setToolTip(str(next(iter(folders))) if len(folders) == 1 else "")
         if self.filterEdit.text():
             self.apply_filter()
 
-    def _sort_chosen(self, index: int) -> None:
-        column = int(self.sortBox.itemData(index))
-        order = QtCore.Qt.SortOrder.AscendingOrder
-        if column == self.twList.horizontalHeader().sortIndicatorSection():
-            # Choosing the current column again flips the direction, like clicking a header.
-            current = self.twList.horizontalHeader().sortIndicatorOrder()
-            if current == QtCore.Qt.SortOrder.AscendingOrder:
-                order = QtCore.Qt.SortOrder.DescendingOrder
-        self.set_sorting(column, order)
+    def sort_by(self, column: int) -> None:
+        # A newly chosen column starts in ascending order; the Descending item flips the current one.
+        descending = self.descendingAction.isChecked() and column == self.get_sorting()[0]
+        self.set_sorting(
+            column, QtCore.Qt.SortOrder.DescendingOrder if descending else QtCore.Qt.SortOrder.AscendingOrder
+        )
 
-    def _sort_indicator_changed(self, column: int, _order: QtCore.Qt.SortOrder) -> None:
-        index = self.sortBox.findData(column)
-        if index >= 0:
-            self.sortBox.setCurrentIndex(index)
+    def _descending_toggled(self, descending: bool) -> None:
+        order = QtCore.Qt.SortOrder.DescendingOrder if descending else QtCore.Qt.SortOrder.AscendingOrder
+        self.set_sorting(self.get_sorting()[0], order)
+
+    def _sort_indicator_changed(self, column: int, order: QtCore.Qt.SortOrder | int) -> None:
+        label = "Name"
+        for action in self.sortActions.actions():
+            if action.data() == column:
+                action.setChecked(True)
+                label = action.text()
+        descending = QtCore.Qt.SortOrder(order) == QtCore.Qt.SortOrder.DescendingOrder
+        self.descendingAction.setChecked(descending)
+        self.sortButton.setText(f"Sort: {label} {'↓' if descending else '↑'}")
+
+    def card_text(self, row: int) -> tuple[str, str]:
+        """The two lines a card shows: series and issue (from the tags, else the file name), and the file name."""
+        archive = self.get_archive_by_row(row)
+        if archive is None:
+            return "", ""
+        key = str(archive.path)
+        filename = archive.path.name
+        if key not in self._card_titles:
+            self._card_titles[key] = self._title_from_filename(archive)
+            tagged = self.twList.item(row, self.MDFlagColNum)
+            if tagged is not None and tagged.text().strip():
+                self._card_pool.start(_CardInfoJob(archive.path, self.config, self._card_signals))
+        return self._card_titles[key] or archive.path.stem, filename
+
+    def _title_from_filename(self, archive: ComicArchive) -> str:
+        try:
+            from comictaggerlib.md import parse_archive_filename
+
+            return card_title(parse_archive_filename(archive, self.config))
+        except Exception:
+            logger.debug("Could not parse %s", archive.path, exc_info=True)
+            return ""
+
+    def _card_title_loaded(self, key: str, title: str) -> None:
+        if title and key in self._card_titles:
+            self._card_titles[key] = title
+            self.twList.viewport().update()
+
+    def forget_card(self, archive: ComicArchive) -> None:
+        """Drop the cached card title and cover, after the archive's tags or pages change."""
+        self._card_titles.pop(str(archive.path), None)
+        self.thumbs.forget(archive.path)
 
     def update_minimum_height(self) -> None:
         table = self.twList
@@ -804,6 +947,7 @@ class FileSelectionList(QtWidgets.QWidget):
     def update_row(self, row: int) -> None:
         if row >= 0:
             ca: ComicArchive = self.twList.item(row, FileSelectionList.dataColNum).data(QtCore.Qt.ItemDataRole.UserRole)
+            self.forget_card(ca)
 
             filename_item = self.twList.item(row, FileSelectionList.fileColNum)
             assert filename_item

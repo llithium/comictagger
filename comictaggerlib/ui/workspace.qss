@@ -123,7 +123,11 @@ QTableWidget#twList[cards="true"] { border: 0; background: @surface; selection-b
 QWidget#widgetListHolder { background: @surface; border-right: 1px solid @edge; }
 QLineEdit#fileFilter { background: @canvas; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 5px 8px; }
 QLineEdit#fileFilter:focus { border-color: @accent; }
-QComboBox#fileSort { background: transparent; color: @muted; border: 0; padding: 2px 4px; font-size: @smallText; }
+QLabel#fileListTitle { color: @muted; font-size: @smallText; font-weight: bold; padding-left: 2px; }
+QToolButton#fileSort { background: transparent; color: @ink; border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; font-size: @smallText; }
+QToolButton#fileSort:hover { background: @wash; }
+QToolButton#fileSort:focus { border-color: palette(highlight); }
+QToolButton#fileSort::menu-indicator { image: none; }
 QToolButton#viewToggle { background: @surface; color: @muted; border: 1px solid @edge; padding: 4px 9px; font-size: @smallText; font-weight: bold; }
 QToolButton#viewToggle:checked { background: @wash; color: @ink; }
 QToolButton#viewToggle:focus { border-color: palette(highlight); }

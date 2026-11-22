@@ -33,6 +33,10 @@ DEFAULT_COLORS = {
 }
 
 
+# Text and fill colours for each chip tone; the rest use "<tone>" on "<tone>Soft".
+CHIP_COLORS = {"acc": ("accent", "accSoft"), "muted": ("muted", "wash")}
+
+
 class HasColors(Protocol):
     colors: dict[str, str]
 
@@ -62,6 +66,29 @@ def section_label(text: str) -> QtWidgets.QLabel:
     label = QtWidgets.QLabel(text.upper())
     label.setObjectName("sectionLabel")
     return label
+
+
+class ElidedLabel(QtWidgets.QLabel):
+    """A one-line label that shortens its text to fit, instead of setting the window's minimum width."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.full_text = ""
+        self.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+
+    def set_full_text(self, text: str) -> None:
+        self.full_text = text
+        self.setToolTip(text if text else "")
+        self._elide()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent | None) -> None:
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        width = max(self.width(), 40)
+        self.setText(self.fontMetrics().elidedText(self.full_text, QtCore.Qt.TextElideMode.ElideRight, width))
 
 
 class Painter:
@@ -100,10 +127,11 @@ class Painter:
         small.setBold(True)
         metrics = QtGui.QFontMetricsF(small)
         rect = QtCore.QRectF(x, y, metrics.horizontalAdvance(text) + 16, metrics.height() + 4)
+        ink, fill = CHIP_COLORS.get(tone, (tone, tone + "Soft"))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(self.color(tone + "Soft"))
+        painter.setBrush(self.color(fill))
         painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
-        painter.setPen(self.color(tone))
+        painter.setPen(self.color(ink))
         painter.setFont(small)
         painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
         return rect.width()

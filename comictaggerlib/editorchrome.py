@@ -7,7 +7,7 @@ import platform
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from comictaggerlib.workspacestyle import chip
+from comictaggerlib.workspacestyle import ElidedLabel, chip
 
 
 @dataclasses.dataclass
@@ -176,29 +176,6 @@ class FormCards(QtCore.QObject):
 def shortcut_text(sequence: QtGui.QKeySequence) -> str:
     text = sequence.toString(QtGui.QKeySequence.SequenceFormat.NativeText)
     return text.replace("Ctrl+", "⌘") if platform.system() == "Darwin" and "⌘" not in text else text
-
-
-class ElidedLabel(QtWidgets.QLabel):
-    """A one-line label that shortens its text to fit, instead of setting the window's minimum width."""
-
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.full_text = ""
-        self.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
-
-    def set_full_text(self, text: str) -> None:
-        self.full_text = text
-        self.setToolTip(text if text else "")
-        self._elide()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent | None) -> None:
-        super().resizeEvent(event)
-        self._elide()
-
-    def _elide(self) -> None:
-        width = max(self.width(), 40)
-        self.setText(self.fontMetrics().elidedText(self.full_text, QtCore.Qt.TextElideMode.ElideRight, width))
 
 
 class EditorHeader(QtWidgets.QWidget):
