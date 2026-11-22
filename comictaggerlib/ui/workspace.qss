@@ -49,3 +49,71 @@ QWidget#scrollAreaWidgetContents QCheckBox::indicator:unchecked {
     width: 13px; height: 13px; background: @surface; border: 1px solid @muted; border-radius: 3px;
 }
 QWidget#scrollAreaWidgetContents QCheckBox::indicator:unchecked:disabled { background: @wash; border-color: @edge; }
+
+/* ----- Editor / Review switch ----- */
+QToolBar QToolButton#viewSwitch { border: 1px solid @edge; border-radius: 0; padding: 5px 12px; margin: 0; }
+QToolBar QToolButton#viewSwitch:checked { background: @selection; color: @ink; font-weight: bold; border-color: @accent; }
+
+/* ----- Auto-Tag review ----- */
+QWidget#autoTagReview { background: @canvas; color: @ink; }
+QWidget#reviewSidebar { background: @canvas; }
+QWidget#reviewList { background: @surface; border-left: 1px solid @edge; border-right: 1px solid @edge; }
+QWidget#reviewDetail, QLabel#emptyLabel { background: @surface; }
+QLabel#emptyLabel { color: @muted; font-size: @headingText; padding: 24px; }
+QSplitter#reviewSplitter::handle { background: @edge; }
+QLabel#sectionLabel { color: @muted; font-size: @smallText; font-weight: bold; padding: 12px 14px 6px 14px; letter-spacing: 1px; }
+QListWidget#reviewGroups, QListWidget#reviewFiles { background: transparent; border: 0; outline: 0; color: @ink; }
+QLabel#attribution { color: @muted; font-size: @smallText; padding: 6px 14px; }
+QLabel#attribution a { color: @accent; }
+QLabel#reviewHeading { color: @ink; font-size: @headingText; font-weight: bold; }
+QLabel#positionLabel, QLabel#caption, QLabel#messageLabel { color: @muted; }
+QLabel#messageLabel { font-size: @bodyText; padding-top: 4px; }
+
+QLabel#chip { border-radius: 9px; padding: 1px 9px; font-size: @smallText; font-weight: bold; }
+QLabel#chip[tone="warn"] { background: @warnSoft; color: @warn; }
+QLabel#chip[tone="bad"] { background: @badSoft; color: @bad; }
+QLabel#chip[tone="ok"] { background: @okSoft; color: @ok; }
+QLabel#chip[tone="acc"] { background: @accSoft; color: @accent; }
+QLabel#chip[tone="muted"] { background: @wash; color: @muted; }
+
+QScrollArea#candidateStrip, QWidget#candidateHolder { background: transparent; border: 0; }
+QFrame#candidateCard { background: @surface; border: 1px solid @edge; border-radius: 8px; }
+QFrame#candidateCard:hover { border-color: @fieldBorder; }
+QFrame#candidateCard[selected="true"] { border: 2px solid @accent; background: @surface; }
+QLabel#cardKey { color: @muted; font-family: monospace; font-size: @smallText; }
+QLabel#cardTitle { color: @ink; font-weight: bold; }
+QLabel#cardMeta { color: @muted; font-size: @smallText; }
+
+QTableWidget#diffTable { background: @surface; border: 0; color: @ink; }
+QTableWidget#diffTable::item { border-bottom: 1px solid @edge; padding: 4px 8px; }
+QTableWidget#diffTable QHeaderView::section, QWidget#searchPanel QHeaderView::section {
+    background: @surface; color: @muted; border: 0; border-bottom: 1px solid @edge; padding: 5px 8px; font-size: @smallText; font-weight: bold;
+}
+
+QWidget#autoTagReview QPushButton, QWidget#searchPanel QPushButton {
+    background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; padding: 6px 12px; font-size: @bodyText;
+}
+QWidget#autoTagReview QPushButton:hover, QWidget#searchPanel QPushButton:hover { background: @wash; }
+QWidget#autoTagReview QPushButton:focus, QWidget#searchPanel QPushButton:focus { border-color: palette(highlight); }
+QWidget#autoTagReview QPushButton:disabled, QWidget#searchPanel QPushButton:disabled { color: @muted; background: @canvas; }
+QWidget#autoTagReview QPushButton[primary="true"]:enabled, QWidget#searchPanel QPushButton[primary="true"]:enabled {
+    background: @accent; border-color: @accent; color: @onAccent; font-weight: bold;
+}
+
+QWidget#runBar { background: @surface; border-bottom: 1px solid @edge; }
+QLabel#runTitle { color: @ink; font-weight: bold; }
+QLabel#runCount { color: @muted; font-family: monospace; }
+QProgressBar#runProgress { background: @wash; border: 0; border-radius: 4px; }
+QProgressBar#runProgress::chunk { background: @ok; border-radius: 4px; }
+QWidget#reviewStatus { background: @wash; border-top: 1px solid @edge; }
+QWidget#reviewStatus QLabel { color: @muted; font-size: @smallText; }
+
+/* ----- Search panel (review and Search Online) ----- */
+QWidget#searchPanel { background: @surface; color: @ink; }
+QWidget#searchPanel QLabel { color: @muted; }
+QWidget#searchPanel QLineEdit { background: @surface; color: @ink; border: 1px solid @fieldBorder; border-radius: 5px; padding: 5px 8px; }
+QWidget#searchPanel QLineEdit:focus { border-color: @accent; }
+QWidget#searchPanel QTableWidget { background: @surface; color: @ink; border: 1px solid @edge; border-radius: 6px; selection-background-color: @selection; selection-color: @ink; }
+QWidget#searchPanel QTableWidget::item { padding: 4px 8px; }
+QDockWidget#searchDock { color: @ink; }
+QDockWidget#searchDock > QWidget { background: @surface; }

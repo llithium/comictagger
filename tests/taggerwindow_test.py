@@ -54,13 +54,13 @@ def test_workspace_follows_palette_changes(workspace):
     palette = workspace.palette()
     palette.setColor(role, QtGui.QColor("black"))
     workspace.setPalette(palette)
-    assert "#1e2326" in workspace.centralWidget.styleSheet()
-    assert "#1e2326" in workspace.toolBar.styleSheet()
+    assert "#16181e" in workspace.centralWidget.styleSheet()
+    assert "#16181e" in workspace.toolBar.styleSheet()
 
     palette.setColor(role, QtGui.QColor("white"))
     workspace.setPalette(palette)
-    assert "#f2f4f3" in workspace.centralWidget.styleSheet()
-    assert "#f2f4f3" in workspace.toolBar.styleSheet()
+    assert "#f1f2f5" in workspace.centralWidget.styleSheet()
+    assert "#f1f2f5" in workspace.toolBar.styleSheet()
 
 
 @pytest.mark.parametrize("draft_field", ["title", "rating"])

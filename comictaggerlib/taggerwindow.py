@@ -476,6 +476,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def show_editor(self) -> None:
         entering_editor = not self.welcome.isHidden()
+        if hasattr(self, "autoTagReview") and self.in_review():
+            self.autoTagReview.hide()
+            self.actionEditorView.setChecked(True)
         self.toolBar.show()
         self.welcome.hide()
         self.splitter.show()
@@ -494,16 +497,25 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def apply_workspace_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
+        # Cool neutrals with a blue accent; status colours mark what needs attention in the review.
         colors = {
-            "canvas": "#1e2326" if dark else "#f2f4f3",
-            "surface": "#282e30" if dark else "#ffffff",
-            "ink": "#f0f4f1" if dark else "#1d302d",
-            "muted": "#bdcbc6" if dark else "#4b615b",
-            "edge": "#58645f" if dark else "#c9d3cf",
-            "accent": "#a6dfcb" if dark else "#175b49",
-            "onAccent": "#112b22" if dark else "#ffffff",
-            "fieldBorder": "#899a92" if dark else "#7a8b83",
-            "wash": "#343e3b" if dark else "#e9efec",
+            "canvas": "#16181e" if dark else "#f1f2f5",
+            "surface": "#1f222b" if dark else "#ffffff",
+            "ink": "#e3e6ed" if dark else "#1f2330",
+            "muted": "#a3aaba" if dark else "#5d6473",
+            "edge": "#363b47" if dark else "#d9dce3",
+            "accent": "#7d9cf5" if dark else "#2f5bd3",
+            "onAccent": "#0e1426" if dark else "#ffffff",
+            "fieldBorder": "#6b7282" if dark else "#8a91a0",
+            "wash": "#2a2e38" if dark else "#e7e9ee",
+            "selection": "#2d3c63" if dark else "#dbe5fb",
+            "ok": "#4cc483" if dark else "#1f8a4c",
+            "okSoft": "#173a28" if dark else "#e2f4ea",
+            "warn": "#f0a93b" if dark else "#9a5c00",
+            "warnSoft": "#3d2e12" if dark else "#fdf0d9",
+            "bad": "#f07272" if dark else "#c23b3b",
+            "badSoft": "#3f1c1c" if dark else "#fbe5e5",
+            "accSoft": "#25305a" if dark else "#e3eafc",
         }
         with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
             style = sheet.read()
@@ -511,10 +523,15 @@ class TaggerWindow(QtWidgets.QMainWindow):
         for name, scale in (("bodyText", 1.0), ("smallText", 0.92), ("headingText", 1.23), ("welcomeText", 2.15)):
             style = style.replace("@" + name, f"{round(font_size * scale)}px")
         style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
-        for role, color in colors.items():
-            style = style.replace("@" + role, color)
+        # Longest names first, so "@okSoft" isn't half-replaced by "@ok".
+        for role in sorted(colors, key=len, reverse=True):
+            style = style.replace("@" + role, colors[role])
         self.centralWidget.setStyleSheet(style)
         self.toolBar.setStyleSheet(style)
+        if hasattr(self, "searchDock"):
+            self.searchDock.setStyleSheet(style)
+        if hasattr(self, "autoTagReview"):
+            self.autoTagReview.set_colors(colors)
         self.fileSelectionList.update_minimum_height()
 
     def enabled_tags(self) -> Sequence[str]:
@@ -576,6 +593,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_info_box()
 
         self.splitter.hide()
+        if hasattr(self, "autoTagReview") and not self.autoTagReview.running:
+            # The list was cleared, so the review's archives are gone too.
+            self.autoTagReview.items = []
+            self.autoTagReview.hide()
+            self.autoTagReview._refresh()
         self.welcome.show()
         self.toolBar.hide()
         self.droppedFile = None
@@ -1310,7 +1332,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.searchDock.setWidget(self.searchPanel)
         self.searchDock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.searchDock)
-        self.tabifyDockWidget(self.autoTagReviewDock, self.searchDock)
         self.searchDock.hide()
         self._search_target: ComicArchive | None = None
         self.searchPanel.issueChosen.connect(self.search_panel_chose)
@@ -2105,7 +2126,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def auto_tag(self) -> None:
         if self.auto_tag_running():
-            self._show_review_dock()
+            self.show_review()
             return
         ca_list = self.fileSelectionList.get_selected_archive_list()
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
@@ -2163,7 +2184,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.autotagthread.ratelimit.connect(self.ratelimit)
 
         self.autoTagReview.begin_run(ca_list, temp_config, self.current_talker())
-        self._show_review_dock()
+        self.show_review()
         self.actionAutoTag.setEnabled(False)
 
         self.auto_tag_log("==========================================================================\n")
@@ -2244,32 +2265,72 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def setup_auto_tag_review(self) -> None:
         self.autoTagReview = AutoTagReviewPanel(None, self.config[0].Runtime_Options__config.user_cache_dir)
-        self.autoTagReviewDock = QtWidgets.QDockWidget("Auto-Tag Review", self)
-        self.autoTagReviewDock.setObjectName("autoTagReviewDock")
-        self.autoTagReviewDock.setWidget(self.autoTagReview)
-        self.autoTagReviewDock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.autoTagReviewDock)
-        self.autoTagReviewDock.hide()
-        review_action = self.autoTagReviewDock.toggleViewAction()
-        review_action.setText("Auto-Tag Review")
+        # The review takes over the window, like an inbox; the toolbar switches between it and the editor.
+        self.gridLayout.addWidget(self.autoTagReview, 0, 0)
+        self.autoTagReview.hide()
+
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.toolBar.addWidget(spacer)
+        self.viewGroup = QtGui.QActionGroup(self)
+        self.viewGroup.setExclusive(True)
+        self.actionEditorView = QtGui.QAction("Editor", self)
+        self.actionReviewView = QtGui.QAction("Review", self)
+        for action, slot in ((self.actionEditorView, self.show_editor_view), (self.actionReviewView, self.show_review)):
+            action.setCheckable(True)
+            action.triggered.connect(slot)
+            self.viewGroup.addAction(action)
+            self.toolBar.addAction(action)
+            button = self.toolBar.widgetForAction(action)
+            if button is not None:
+                button.setObjectName("viewSwitch")
+        self.actionEditorView.setChecked(True)
+        self.actionReviewView.setToolTip("Review the results of the last Auto-Tag run")
+        self.actionReviewView.setVisible(False)
+        self.actionEditorView.setVisible(False)
+
+        review_action = QtGui.QAction("Auto-Tag Review", self)
+        review_action.triggered.connect(self.show_review)
         self.menuWindow.addAction(review_action)
         self.autoTagReview.openRequested.connect(self.review_open_archive)
         self.autoTagReview.matchesWritten.connect(self.review_matches_written)
         self.autoTagReview.stopRequested.connect(self.stop_auto_tag)
         self.autoTagReview.logRequested.connect(self.show_auto_tag_log)
         self.autoTagReview.ratelimit.connect(self.on_ratelimit)
+        self.autoTagReview.countsChanged.connect(self._update_review_switch)
 
-    def _show_review_dock(self) -> None:
-        self.autoTagReviewDock.show()
-        self.autoTagReviewDock.raise_()
-        self.resizeDocks([self.autoTagReviewDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
+    def _update_review_switch(self) -> None:
+        has_review = bool(self.autoTagReview.items) or self.autoTagReview.running
+        self.actionReviewView.setVisible(has_review)
+        self.actionEditorView.setVisible(has_review)
+        pending = self.autoTagReview.pending_count()
+        self.actionReviewView.setText(f"Review · {pending}" if pending else "Review")
+
+    def in_review(self) -> bool:
+        return not self.autoTagReview.isHidden()
+
+    def show_review(self) -> None:
+        self.welcome.hide()
+        self.splitter.hide()
+        self.toolBar.show()
+        self.autoTagReview.show()
+        self.actionReviewView.setChecked(True)
+        self._update_review_switch()
+        self.autoTagReview.fileList.setFocus()
+
+    def show_editor_view(self) -> None:
+        self.autoTagReview.hide()
+        self.actionEditorView.setChecked(True)
+        if self.fileSelectionList.twList.rowCount() or self.comic_archive is not None:
+            self.show_editor()
+        else:
+            self.welcome.show()
 
     def show_auto_tag_review(
         self, match_results: OnlineMatchResults, *, config: ct_ns, archives: list[ComicArchive]
     ) -> None:
         self.autoTagReview.load_results(match_results, archives, config, self.current_talker())
-        self._show_review_dock()
-        self.autoTagReview.fileList.setFocus()
+        self.show_review()
         self.statusBar().showMessage(self.autoTagReview.summary())
 
     def _select_archive_in_list(self, archive: ComicArchive) -> bool:
@@ -2283,6 +2344,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def review_open_archive(self, archive: ComicArchive) -> None:
         if self._select_archive_in_list(archive):
+            self.show_editor_view()
             self.leSeries.setFocus()
 
     def review_matches_written(self, archives: list[ComicArchive]) -> None:

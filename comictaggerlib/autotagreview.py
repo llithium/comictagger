@@ -1,4 +1,4 @@
-"""A docked panel for triaging Auto-Tag results.
+"""The Auto-Tag review: an inbox for triaging the results of a run.
 
 After a run, every archive lands in one of four groups: matches that need a
 decision, archives with no match, archives that hit an error, and archives that
@@ -10,6 +10,7 @@ to the regular online search when no candidate fits.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
 import pathlib
 from collections.abc import Callable, Iterable
@@ -206,6 +207,306 @@ def _shortcut(widget: QtWidgets.QWidget, keys: str, slot: Callable[[], object]) 
     return shortcut
 
 
+# Light palette; the main window replaces it with the workspace theme (light or dark).
+DEFAULT_COLORS = {
+    "canvas": "#f1f2f5",
+    "surface": "#ffffff",
+    "ink": "#1f2330",
+    "muted": "#5d6473",
+    "edge": "#d9dce3",
+    "accent": "#2f5bd3",
+    "selection": "#dbe5fb",
+    "ok": "#1f8a4c",
+    "okSoft": "#e2f4ea",
+    "warn": "#9a5c00",
+    "warnSoft": "#fdf0d9",
+    "bad": "#c23b3b",
+    "badSoft": "#fbe5e5",
+}
+
+OUTCOME_TONES = {
+    Outcome.needs_review: "warn",
+    Outcome.no_match: "bad",
+    Outcome.error: "bad",
+    Outcome.tagged: "ok",
+}
+
+_ITEM_ROLE = QtCore.Qt.ItemDataRole.UserRole
+
+
+def _set_property(widget: QtWidgets.QWidget, name: str, value: object) -> None:
+    """Change a property that the stylesheet selects on, and repaint with the new style."""
+    if widget.property(name) == value:
+        return
+    widget.setProperty(name, value)
+    style = widget.style()
+    if style is not None:
+        style.unpolish(widget)
+        style.polish(widget)
+
+
+def _chip(text: str = "", tone: str = "warn") -> QtWidgets.QLabel:
+    label = QtWidgets.QLabel(text)
+    label.setObjectName("chip")
+    label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+    label.setProperty("tone", tone)
+    label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
+    return label
+
+
+def _section(text: str) -> QtWidgets.QLabel:
+    label = QtWidgets.QLabel(text.upper())
+    label.setObjectName("sectionLabel")
+    return label
+
+
+class _Painter:
+    """Shared drawing helpers for the review's list delegates."""
+
+    def __init__(self, panel: AutoTagReviewPanel) -> None:
+        self.panel = panel
+
+    def color(self, name: str) -> QtGui.QColor:
+        return QtGui.QColor(self.panel.colors.get(name, DEFAULT_COLORS[name]))
+
+    def background(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, inset: int) -> None:
+        rect = QtCore.QRectF(option.rect.adjusted(inset, 1, -inset, -1))
+        state = option.state
+        if state & QtWidgets.QStyle.StateFlag.State_Selected:
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(self.color("selection"))
+            painter.drawRoundedRect(rect, 6, 6)
+        elif state & QtWidgets.QStyle.StateFlag.State_MouseOver:
+            hover = self.color("selection")
+            hover.setAlpha(110)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(hover)
+            painter.drawRoundedRect(rect, 6, 6)
+        if state & QtWidgets.QStyle.StateFlag.State_HasFocus:
+            pen = QtGui.QPen(self.color("accent"))
+            pen.setWidthF(1.5)
+            painter.setPen(pen)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
+
+    def chip(self, painter: QtGui.QPainter, x: float, y: float, text: str, tone: str, font: QtGui.QFont) -> None:
+        small = QtGui.QFont(font)
+        small.setPointSizeF(max(font.pointSizeF() * 0.85, 7))
+        small.setBold(True)
+        metrics = QtGui.QFontMetricsF(small)
+        rect = QtCore.QRectF(x, y, metrics.horizontalAdvance(text) + 16, metrics.height() + 4)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(self.color(tone + "Soft"))
+        painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        painter.setPen(self.color(tone))
+        painter.setFont(small)
+        painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
+
+
+class GroupDelegate(QtWidgets.QStyledItemDelegate):
+    """Sidebar rows: a coloured dot, the group name and its count."""
+
+    def __init__(self, panel: AutoTagReviewPanel) -> None:
+        super().__init__(panel)
+        self.draw = _Painter(panel)
+
+    def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
+        return QtCore.QSize(160, option.fontMetrics.height() + 14)
+
+    def paint(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> None:
+        outcome = index.data(_ITEM_ROLE)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        self.draw.background(painter, option, 6)
+        rect = option.rect.adjusted(18, 0, -16, 0)
+        tone = OUTCOME_TONES.get(outcome, "ok")
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(self.draw.color(tone))
+        painter.drawEllipse(QtCore.QPointF(rect.left() + 4, rect.center().y() + 1), 4, 4)
+        font = QtGui.QFont(option.font)
+        font.setBold(bool(option.state & QtWidgets.QStyle.StateFlag.State_Selected))
+        painter.setFont(font)
+        painter.setPen(self.draw.color("ink"))
+        label_rect = rect.adjusted(16, 0, -40, 0)
+        painter.drawText(label_rect, QtCore.Qt.AlignmentFlag.AlignVCenter, OUTCOME_LABELS.get(outcome, ""))
+        count = str(index.data(QtCore.Qt.ItemDataRole.UserRole + 1) or 0)
+        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
+        mono.setPointSizeF(option.font.pointSizeF() * 0.9)
+        painter.setFont(mono)
+        painter.setPen(self.draw.color("muted"))
+        painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignRight, count)
+        painter.restore()
+
+
+class FileDelegate(QtWidgets.QStyledItemDelegate):
+    """Archive rows: a cover thumbnail, the file name and a status chip."""
+
+    def __init__(self, panel: AutoTagReviewPanel) -> None:
+        super().__init__(panel)
+        self.panel = panel
+        self.draw = _Painter(panel)
+
+    def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
+        return QtCore.QSize(260, max(60, option.fontMetrics.height() * 2 + 26))
+
+    def paint(self, painter: QtGui.QPainter, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> None:
+        item: ReviewItem | None = index.data(_ITEM_ROLE)
+        if item is None:
+            return
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        self.draw.background(painter, option, 4)
+        rect = option.rect.adjusted(12, 7, -10, -7)
+        thumb_rect = QtCore.QRect(rect.left(), rect.top(), int(rect.height() * 2 / 3), rect.height())
+        pixmap = self.panel.thumbnail(item.archive)
+        if pixmap is not None and not pixmap.isNull():
+            scaled = pixmap.scaled(
+                thumb_rect.size(),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            painter.setClipRect(thumb_rect)
+            painter.drawPixmap(thumb_rect.topLeft(), scaled)
+            painter.setClipping(False)
+        else:
+            painter.fillRect(thumb_rect, self.draw.color("edge"))
+        text_left = thumb_rect.right() + 10
+        font = QtGui.QFont(option.font)
+        font.setWeight(QtGui.QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.setPen(self.draw.color("ink"))
+        metrics = QtGui.QFontMetrics(font)
+        name = metrics.elidedText(item.name, QtCore.Qt.TextElideMode.ElideMiddle, rect.right() - text_left)
+        painter.drawText(text_left, rect.top() + metrics.ascent() + 2, name)
+        tone = "ok" if item.resolution else OUTCOME_TONES[item.outcome]
+        self.draw.chip(painter, text_left, rect.top() + metrics.height() + 8, item.reason, tone, option.font)
+        painter.restore()
+
+
+class CandidateCard(QtWidgets.QFrame):
+    """One possible match: its cover, series, issue, date and how it was ranked."""
+
+    clicked = QtCore.pyqtSignal(int)
+    activated = QtCore.pyqtSignal(int)
+
+    def __init__(self, index: int, match: IssueResult, cache_dir: pathlib.Path | None, best: bool) -> None:
+        super().__init__()
+        self.index = index
+        self.match = match
+        self.setObjectName("candidateCard")
+        self.setProperty("selected", False)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFixedWidth(230)
+        self.setAccessibleName(f"Match {index + 1}: {match.series.name} #{match.md.issue or '?'}")
+
+        self.cover = CoverImageWidget(None, CoverImageWidget.URLMode, cache_dir, expand_on_click=False)
+        self.cover.showControls = False
+        self.cover.setFixedSize(66, 100)
+        self.cover.set_url(match.md._cover_image.URL if match.md._cover_image else match.series.image_url)
+
+        key = QtWidgets.QLabel(str(index + 1) if index < 9 else "")
+        key.setObjectName("cardKey")
+        title = QtWidgets.QLabel(f"{match.series.name} #{match.md.issue}" if match.md.issue else match.series.name)
+        title.setObjectName("cardTitle")
+        title.setWordWrap(True)
+        title.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        date = " ".join(
+            x for x in (f"{int(match.md.month):02d}/" if match.md.month else "", str(match.md.year or "")) if x
+        ).replace("/ ", "/")
+        meta = QtWidgets.QLabel(" · ".join(x for x in (date, str(match.md.publisher or "")) if x))
+        meta.setObjectName("cardMeta")
+        meta.setWordWrap(True)
+        meta.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        rank = _chip("Best guess" if best else f"Match {index + 1}", "acc" if best else "muted")
+
+        text = QtWidgets.QVBoxLayout()
+        text.setSpacing(3)
+        text.addWidget(key)
+        text.addWidget(title)
+        text.addWidget(meta)
+        text.addStretch(1)
+        text.addWidget(rank)
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+        layout.addWidget(self.cover, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(text, 1)
+
+        # Clicks anywhere on the card select it; the labels already pass clicks up to the card.
+        self.cover.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_selected(self, selected: bool) -> None:
+        _set_property(self, "selected", selected)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent | None) -> None:
+        self.clicked.emit(self.index)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent | None) -> None:
+        self.activated.emit(self.index)
+
+
+class CandidateStrip(QtWidgets.QScrollArea):
+    """A row of candidate cards, one of which is selected."""
+
+    currentChanged = QtCore.pyqtSignal(int)
+    activated = QtCore.pyqtSignal(int)
+
+    def __init__(self, cache_dir: pathlib.Path | None) -> None:
+        super().__init__()
+        self.setObjectName("candidateStrip")
+        self.cache_dir = cache_dir
+        self.setWidgetResizable(True)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setAccessibleName("Candidate matches")
+        self.cards: list[CandidateCard] = []
+        self._current = -1
+        holder = QtWidgets.QWidget()
+        holder.setObjectName("candidateHolder")
+        self.row = QtWidgets.QHBoxLayout(holder)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(10)
+        self.row.addStretch(1)
+        self.setWidget(holder)
+
+    def set_candidates(self, matches: list[IssueResult]) -> None:
+        for card in self.cards:
+            self.row.removeWidget(card)
+            card.deleteLater()
+        self.cards = []
+        self._current = -1
+        for i, match in enumerate(matches):
+            card = CandidateCard(i, match, self.cache_dir, best=i == 0)
+            card.clicked.connect(self.set_current)
+            card.activated.connect(self.activated)
+            self.row.insertWidget(i, card)
+            self.cards.append(card)
+        if self.cards:
+            self.set_current(0)
+
+    def count(self) -> int:
+        return len(self.cards)
+
+    def current_index(self) -> int:
+        return self._current
+
+    def current_match(self) -> IssueResult | None:
+        return self.cards[self._current].match if 0 <= self._current < len(self.cards) else None
+
+    def set_current(self, index: int) -> None:
+        if not 0 <= index < len(self.cards):
+            return
+        changed = index != self._current
+        self._current = index
+        for card in self.cards:
+            card.set_selected(card.index == index)
+        self.ensureWidgetVisible(self.cards[index])
+        if changed:
+            self.currentChanged.emit(index)
+
+
 class AutoTagReviewPanel(QtWidgets.QWidget):
     """Inbox-style review of the latest Auto-Tag run."""
 
@@ -214,79 +515,134 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
     stopRequested = QtCore.pyqtSignal()
     ratelimit = QtCore.pyqtSignal(float, float)
     logRequested = QtCore.pyqtSignal()
+    countsChanged = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None, cache_dir: pathlib.Path | None) -> None:
         super().__init__(parent)
         self.setObjectName("autoTagReview")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.items: list[ReviewItem] = []
         self.config: ct_ns | None = None
         self.talker: ComicTalker | None = None
+        self.colors = dict(DEFAULT_COLORS)
         self._outcome = Outcome.needs_review
         self._current_md = GenericMetadata()
         self._run_archives: list[ComicArchive] = []
+        self._thumbs: dict[pathlib.Path, QtGui.QPixmap] = {}
         self.running = False
 
+        # ----- sidebar -----
         self.categoryList = QtWidgets.QListWidget()
+        self.categoryList.setObjectName("reviewGroups")
         self.categoryList.setAccessibleName("Result groups")
+        self.categoryList.setItemDelegate(GroupDelegate(self))
+        self.categoryList.setMouseTracking(True)
         for outcome in Outcome:
             item = QtWidgets.QListWidgetItem(OUTCOME_LABELS[outcome])
-            item.setData(QtCore.Qt.ItemDataRole.UserRole, outcome)
+            item.setData(_ITEM_ROLE, outcome)
             self.categoryList.addItem(item)
         self.categoryList.currentRowChanged.connect(self._category_changed)
 
+        self.attributionLabel = QtWidgets.QLabel()
+        self.attributionLabel.setObjectName("attribution")
+        self.attributionLabel.setWordWrap(True)
+        self.attributionLabel.setOpenExternalLinks(True)
+        self.attributionLabel.setTextFormat(QtCore.Qt.TextFormat.RichText)
+
+        sidebar = QtWidgets.QWidget()
+        sidebar.setObjectName("reviewSidebar")
+        sidebar.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 10)
+        sidebar_layout.setSpacing(0)
+        sidebar_layout.addWidget(_section("This run"))
+        sidebar_layout.addWidget(self.categoryList, 1)
+        sidebar_layout.addWidget(self.attributionLabel)
+
+        # ----- file list -----
+        self.listHeading = _section("")
         self.fileList = QtWidgets.QListWidget()
+        self.fileList.setObjectName("reviewFiles")
         self.fileList.setAccessibleName("Archives in group")
-        self.fileList.setWordWrap(True)
-        self.fileList.setUniformItemSizes(False)
-        self.fileList.setSpacing(2)
+        self.fileList.setItemDelegate(FileDelegate(self))
+        self.fileList.setMouseTracking(True)
+        self.fileList.setUniformItemSizes(True)
         self.fileList.currentRowChanged.connect(self._file_changed)
         self.fileList.itemDoubleClicked.connect(lambda _item: self.open_current())
 
+        files = QtWidgets.QWidget()
+        files.setObjectName("reviewList")
+        files.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        files_layout = QtWidgets.QVBoxLayout(files)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(0)
+        files_layout.addWidget(self.listHeading)
+        files_layout.addWidget(self.fileList, 1)
+
+        # ----- detail -----
         self.heading = QtWidgets.QLabel()
+        self.heading.setObjectName("reviewHeading")
         self.heading.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        font = self.heading.font()
-        font.setBold(True)
-        self.heading.setFont(font)
-        self.reasonLabel = QtWidgets.QLabel()
+        self.reasonLabel = _chip()
         self.positionLabel = QtWidgets.QLabel()
+        self.positionLabel.setObjectName("positionLabel")
         self.positionLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
 
-        self.archiveCover = CoverImageWidget(None, CoverImageWidget.ArchiveMode, None, expand_on_click=False)
-        self.archiveCover.setMinimumSize(110, 165)
-        self.candidateCover = CoverImageWidget(None, CoverImageWidget.AltCoverMode, cache_dir, expand_on_click=False)
-        self.candidateCover.setMinimumSize(110, 165)
+        self.archiveCover = CoverImageWidget(None, CoverImageWidget.ArchiveMode, None, expand_on_click=True)
+        self.archiveCover.showControls = False
+        self.archiveCover.setFixedSize(130, 196)
+        yours = QtWidgets.QLabel("Your file")
+        yours.setObjectName("caption")
+        yours.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        your_file = QtWidgets.QVBoxLayout()
+        your_file.setSpacing(6)
+        your_file.addWidget(self.archiveCover)
+        your_file.addWidget(yours)
+        your_file.addStretch(1)
 
-        self.candidateTable = QtWidgets.QTableWidget(0, 5)
-        self.candidateTable.setAccessibleName("Candidate matches")
-        self.candidateTable.setHorizontalHeaderLabels(["Series", "Issue", "Date", "Publisher", "Title"])
-        self.candidateTable.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.candidateTable.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.candidateTable.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.candidateTable.verticalHeader().hide()
-        self.candidateTable.horizontalHeader().setStretchLastSection(True)
-        self.candidateTable.currentCellChanged.connect(self._candidate_changed)
-        self.candidateTable.cellDoubleClicked.connect(lambda _r, _c: self.accept_current())
+        self.candidateStrip = CandidateStrip(cache_dir)
+        self.candidateStrip.currentChanged.connect(self._candidate_changed)
+        self.candidateStrip.activated.connect(lambda _i: self.accept_current())
+        self.candidateStrip.setMinimumHeight(122)
 
+        self.matchCover = CoverImageWidget(None, CoverImageWidget.URLMode, cache_dir, expand_on_click=False)
+        self.matchCover.showControls = False
+        self.matchCover.setFixedSize(66, 100)
         self.messageLabel = QtWidgets.QLabel()
+        self.messageLabel.setObjectName("messageLabel")
         self.messageLabel.setWordWrap(True)
-        self.messageLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        message_page = QtWidgets.QWidget()
+        message_layout = QtWidgets.QHBoxLayout(message_page)
+        message_layout.setContentsMargins(0, 0, 0, 0)
+        message_layout.setSpacing(12)
+        message_layout.addWidget(self.matchCover, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        message_layout.addWidget(self.messageLabel, 1, QtCore.Qt.AlignmentFlag.AlignTop)
+
+        self.candidateArea = QtWidgets.QStackedWidget()
+        self.candidateArea.addWidget(self.candidateStrip)
+        self.candidateArea.addWidget(message_page)
+        self.candidateArea.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Maximum)
 
         self.diffTable = QtWidgets.QTableWidget(0, 3)
+        self.diffTable.setObjectName("diffTable")
         self.diffTable.setAccessibleName("Changes from selected match")
-        self.diffTable.setHorizontalHeaderLabels(["Field", "In file now", "From match"])
+        self.diffTable.setHorizontalHeaderLabels(["Field", "In file now", "After accepting"])
         self.diffTable.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.diffTable.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.diffTable.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.diffTable.setShowGrid(False)
         self.diffTable.verticalHeader().hide()
         self.diffTable.horizontalHeader().setStretchLastSection(True)
+        self.diffTable.horizontalHeader().setDefaultAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
 
         self.btnAccept = QtWidgets.QPushButton("Accept match")
+        self.btnAccept.setProperty("primary", True)
         self.btnAccept.setToolTip("Write the selected match to the archive (Enter)")
-        self.btnAccept.setDefault(True)
-        self.btnSearch = QtWidgets.QPushButton("Search by hand")
+        self.btnSearch = QtWidgets.QPushButton("Search by hand   /")
         self.btnSearch.setToolTip("Find the right series and issue yourself (/)")
-        self.btnOpen = QtWidgets.QPushButton("Open in editor")
-        self.btnOpen.setToolTip("Load the archive into the editor (E)")
-        self.btnSkip = QtWidgets.QPushButton("Skip")
+        self.btnOpen = QtWidgets.QPushButton("Open in editor   E")
+        self.btnOpen.setToolTip("Edit every field of this archive (E)")
+        self.btnSkip = QtWidgets.QPushButton("Skip for now   S")
         self.btnSkip.setToolTip("Leave this archive for later and go to the next one (S)")
         self.btnAccept.clicked.connect(self.accept_current)
         self.btnSearch.clicked.connect(self.search_current)
@@ -294,32 +650,24 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.btnSkip.clicked.connect(self.next_item)
 
         header = QtWidgets.QHBoxLayout()
+        header.setSpacing(10)
         header.addWidget(self.heading)
         header.addWidget(self.reasonLabel)
         header.addStretch(1)
         header.addWidget(self.positionLabel)
 
-        self.candidateArea = QtWidgets.QStackedWidget()
-        self.candidateArea.addWidget(self.candidateTable)
-        self.candidateArea.addWidget(self.messageLabel)
-
-        compare = QtWidgets.QHBoxLayout()
-        compare.addWidget(self.candidateArea, 1)
-        compare.addWidget(self.candidateCover)
-
         buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(8)
         for button in (self.btnAccept, self.btnSearch, self.btnOpen, self.btnSkip):
             buttons.addWidget(button)
         buttons.addStretch(1)
-        hint = QtWidgets.QLabel("J / K: next / previous")
-        hint.setEnabled(False)
-        buttons.addWidget(hint)
 
         review_page = QtWidgets.QWidget()
         review_layout = QtWidgets.QVBoxLayout(review_page)
         review_layout.setContentsMargins(0, 0, 0, 0)
-        review_layout.addLayout(compare, 3)
-        review_layout.addWidget(self.diffTable, 2)
+        review_layout.setSpacing(14)
+        review_layout.addWidget(self.candidateArea)
+        review_layout.addWidget(self.diffTable, 1)
         review_layout.addLayout(buttons)
         self.reviewPage = review_page
 
@@ -333,45 +681,54 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.bodyStack.addWidget(self.searchPanel)
 
         body = QtWidgets.QHBoxLayout()
-        body.addWidget(self.archiveCover, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        body.setSpacing(18)
+        body.addLayout(your_file)
         body.addWidget(self.bodyStack, 1)
 
         detail = QtWidgets.QWidget()
+        detail.setObjectName("reviewDetail")
+        detail.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         detail_layout = QtWidgets.QVBoxLayout(detail)
+        detail_layout.setContentsMargins(18, 16, 18, 16)
+        detail_layout.setSpacing(14)
         detail_layout.addLayout(header)
         detail_layout.addLayout(body, 1)
         self.detail = detail
 
         self.emptyLabel = QtWidgets.QLabel("Nothing in this group.")
+        self.emptyLabel.setObjectName("emptyLabel")
+        self.emptyLabel.setWordWrap(True)
         self.emptyLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.detailStack = QtWidgets.QStackedWidget()
+        self.detailStack.setObjectName("reviewDetailStack")
         self.detailStack.addWidget(detail)
         self.detailStack.addWidget(self.emptyLabel)
 
-        self.attributionLabel = QtWidgets.QLabel()
-        self.attributionLabel.setWordWrap(True)
-        self.attributionLabel.setOpenExternalLinks(True)
-        self.attributionLabel.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        groups = QtWidgets.QWidget()
-        groups.setMaximumWidth(200)
-        groups_layout = QtWidgets.QVBoxLayout(groups)
-        groups_layout.setContentsMargins(0, 0, 0, 0)
-        groups_layout.addWidget(self.categoryList, 1)
-        groups_layout.addWidget(self.attributionLabel)
-
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        splitter.addWidget(groups)
-        splitter.addWidget(self.fileList)
+        splitter.setObjectName("reviewSplitter")
+        splitter.setHandleWidth(1)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(sidebar)
+        splitter.addWidget(files)
         splitter.addWidget(self.detailStack)
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 3)
-        splitter.setSizes([160, 260, 700])
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 1)
+        splitter.setSizes([200, 300, 800])
+        sidebar.setMinimumWidth(170)
+        files.setMinimumWidth(220)
         self.splitter = splitter
 
+        # ----- run bar and status line -----
         self.progressBar = QtWidgets.QProgressBar()
+        self.progressBar.setObjectName("runProgress")
         self.progressBar.setAccessibleName("Auto-Tag progress")
+        self.progressBar.setTextVisible(False)
+        self.progressBar.setFixedHeight(8)
+        self.runTitle = QtWidgets.QLabel("Auto-tagging")
+        self.runTitle.setObjectName("runTitle")
         self.progressLabel = QtWidgets.QLabel()
+        self.progressLabel.setObjectName("runCount")
         self.progressLabel.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.btnLog = QtWidgets.QPushButton("Show details")
         self.btnLog.setToolTip("Show the covers being compared and the run's log")
@@ -380,18 +737,38 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.btnStop.setToolTip("Stop after the archive being identified now")
         self.btnStop.clicked.connect(self._stop)
         self.runBar = QtWidgets.QWidget()
+        self.runBar.setObjectName("runBar")
+        self.runBar.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         run_layout = QtWidgets.QHBoxLayout(self.runBar)
-        run_layout.setContentsMargins(6, 4, 6, 4)
+        run_layout.setContentsMargins(14, 8, 14, 8)
+        run_layout.setSpacing(12)
+        run_layout.addWidget(self.runTitle)
         run_layout.addWidget(self.progressLabel)
         run_layout.addWidget(self.progressBar, 1)
         run_layout.addWidget(self.btnLog)
         run_layout.addWidget(self.btnStop)
         self.runBar.hide()
 
+        self.hintLabel = QtWidgets.QLabel(
+            "J / K  next or previous    1–9  pick a match    Enter  accept    Esc  back to matches"
+        )
+        self.doneLabel = QtWidgets.QLabel("Accepted files move to Tagged and the next one opens")
+        status = QtWidgets.QWidget()
+        status.setObjectName("reviewStatus")
+        status.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        status_layout = QtWidgets.QHBoxLayout(status)
+        status_layout.setContentsMargins(14, 5, 14, 5)
+        status_layout.setSpacing(18)
+        status_layout.addWidget(self.hintLabel)
+        status_layout.addWidget(self.doneLabel)
+        status_layout.addStretch(1)
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.runBar)
-        layout.addWidget(splitter)
+        layout.addWidget(splitter, 1)
+        layout.addWidget(status)
 
         _shortcut(self, "Return", self.accept_current)
         _shortcut(self, "Enter", self.accept_current)
@@ -401,8 +778,32 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         _shortcut(self, "J", self.next_item)
         _shortcut(self, "K", self.previous_item)
         _shortcut(self, "Escape", self._escape)
+        for n in range(1, 10):
+            _shortcut(self, str(n), functools.partial(self._pick_number, n - 1))
 
         self._refresh()
+
+    # ----- appearance -----
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        self.colors.update(colors)
+        self.categoryList.viewport().update()
+        self.fileList.viewport().update()
+
+    def thumbnail(self, archive: ComicArchive) -> QtGui.QPixmap | None:
+        if archive.path not in self._thumbs:
+            pixmap = QtGui.QPixmap()
+            try:
+                data = archive.get_page(0)
+                image = QtGui.QImage.fromData(data) if data else QtGui.QImage()
+                if not image.isNull():
+                    pixmap = QtGui.QPixmap.fromImage(
+                        image.scaledToHeight(120, QtCore.Qt.TransformationMode.SmoothTransformation)
+                    )
+            except Exception:
+                logger.debug("No thumbnail for %s", archive.path, exc_info=True)
+            self._thumbs[archive.path] = pixmap
+        return self._thumbs[archive.path]
 
     # ----- data -----
 
@@ -423,6 +824,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.config = config
         self.talker = talker
         self.attributionLabel.setText(talker.attribution)
+        self._thumbs.clear()
 
     # ----- live runs -----
 
@@ -435,7 +837,8 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self._outcome = Outcome.needs_review
         self.progressBar.setRange(0, len(archives))
         self.progressBar.setValue(0)
-        self.progressLabel.setText(f"Auto-tagging {len(archives)} archives…")
+        self.progressLabel.setText(f"0 / {len(archives)}")
+        self.runTitle.setText("Auto-tagging")
         self.btnStop.setEnabled(True)
         self.runBar.show()
         self._refresh()
@@ -444,7 +847,8 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.progressBar.setRange(0, total)
         self.progressBar.setValue(done)
         name = getattr(path, "name", "")
-        self.progressLabel.setText(f"{done + 1} of {total}: {name}" if name else f"{done} of {total}")
+        self.progressLabel.setText(f"{done} / {total}")
+        self.progressLabel.setToolTip(f"Identifying {name}" if name else "")
 
     def add_result(self, result: Result) -> None:
         """Show one archive's outcome as soon as the run has it, without disturbing what's being reviewed."""
@@ -487,7 +891,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
 
     def _stop(self) -> None:
         self.btnStop.setEnabled(False)
-        self.progressLabel.setText("Stopping after the current archive…")
+        self.runTitle.setText("Stopping after the current archive…")
         self.stopRequested.emit()
 
     def items_in(self, outcome: Outcome) -> list[ReviewItem]:
@@ -519,12 +923,9 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         return group[row] if 0 <= row < len(group) else None
 
     def current_candidate(self) -> IssueResult | None:
-        item = self.current_item()
-        row = self.candidateTable.currentRow()
-        if item is None or self.candidateArea.currentWidget() is not self.candidateTable:
+        if self.current_item() is None or self.candidateArea.currentWidget() is not self.candidateStrip:
             return None
-        cell = self.candidateTable.item(row, 0)
-        return cell.data(QtCore.Qt.ItemDataRole.UserRole) if cell is not None else None
+        return self.candidateStrip.current_match()
 
     # ----- actions -----
 
@@ -587,6 +988,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             return False
         if item.result is not None:
             item.result.md = md
+        self._thumbs.pop(item.archive.path, None)
         self.resolve(item, resolution)
         self.matchesWritten.emit([item.archive])
         return True
@@ -622,6 +1024,10 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         if self._searching():
             self.searchPanel.cancel()
 
+    def _pick_number(self, index: int) -> None:
+        if not self._searching() and self.candidateArea.currentWidget() is self.candidateStrip:
+            self.candidateStrip.set_current(index)
+
     def open_current(self) -> None:
         item = self.current_item()
         if item is not None:
@@ -643,14 +1049,20 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.categoryList.blockSignals(True)
         for row, outcome in enumerate(Outcome):
             count = len(self.items_in(outcome))
-            self.categoryList.item(row).setText(f"{OUTCOME_LABELS[outcome]}  ({count})")
+            entry = self.categoryList.item(row)
+            if entry is not None:
+                entry.setText(f"{OUTCOME_LABELS[outcome]}  ({count})")
+                entry.setData(QtCore.Qt.ItemDataRole.UserRole + 1, count)
             if outcome == self._outcome:
                 self.categoryList.setCurrentRow(row)
         self.categoryList.blockSignals(False)
+        self.listHeading.setText(f"{OUTCOME_LABELS[self._outcome]} · {len(self.items_in(self._outcome))}".upper())
+        self.countsChanged.emit()
 
     @staticmethod
     def _list_entry(item: ReviewItem) -> QtWidgets.QListWidgetItem:
         entry = QtWidgets.QListWidgetItem(f"{item.name}\n{item.reason}")
+        entry.setData(_ITEM_ROLE, item)
         entry.setToolTip(str(item.archive.path))
         return entry
 
@@ -687,12 +1099,13 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             self.emptyLabel.setText(text)
             self.detailStack.setCurrentWidget(self.emptyLabel)
             self.archiveCover.clear()
-            self.candidateCover.clear()
+            self.matchCover.clear()
             return
 
         self.detailStack.setCurrentWidget(self.detail)
         self.heading.setText(item.name)
         self.reasonLabel.setText(item.reason)
+        _set_property(self.reasonLabel, "tone", "ok" if item.resolution else OUTCOME_TONES[item.outcome])
         self.positionLabel.setText(f"{row + 1} of {self.fileList.count()}")
         self.archiveCover.set_archive(item.archive)
 
@@ -703,36 +1116,34 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
                 self._current_md = md
 
         candidates = item.candidates if item.outcome == Outcome.needs_review else []
-        self.candidateTable.setRowCount(len(candidates))
-        for r, match in enumerate(candidates):
-            date = f"{match.md.year or '????'}" + (f"-{int(match.md.month):02d}" if match.md.month else "")
-            values = (match.series.name, match.md.issue or "", date, match.md.publisher or "", match.md.title or "")
-            for c, text in enumerate(values):
-                cell = QtWidgets.QTableWidgetItem(str(text))
-                cell.setToolTip(str(text))
-                if c == 0:
-                    cell.setData(QtCore.Qt.ItemDataRole.UserRole, match)
-                self.candidateTable.setItem(r, c, cell)
-        self.candidateTable.resizeColumnsToContents()
-        self.candidateTable.horizontalHeader().setStretchLastSection(True)
-
         if candidates:
-            self.candidateArea.setCurrentWidget(self.candidateTable)
-            self.candidateTable.setCurrentCell(0, 0)
-            self._candidate_changed(0, 0, -1, -1)
+            self.candidateArea.setCurrentWidget(self.candidateStrip)
+            self.candidateStrip.set_candidates(candidates)
+            self._candidate_changed(self.candidateStrip.current_index())
         else:
-            self.candidateArea.setCurrentWidget(self.messageLabel)
+            self.candidateStrip.set_candidates([])
+            self.candidateArea.setCurrentWidget(self.candidateArea.widget(1))
             self.messageLabel.setText(self._message_for(item))
             shown = item.result.md if item.result is not None and item.result.md is not None else None
             if shown is not None:
                 self._show_candidate_md(shown)
             else:
-                self.candidateCover.clear()
+                self.matchCover.clear()
+                self.matchCover.setVisible(False)
                 self.diffTable.setRowCount(0)
 
         self.btnAccept.setEnabled(bool(candidates) or item.can_retry_write)
-        self.btnAccept.setText("Retry write" if item.can_retry_write else "Accept match")
+        self._label_accept()
         self.btnSkip.setEnabled(row + 1 < self.fileList.count())
+
+    def _label_accept(self) -> None:
+        item = self.current_item()
+        if item is not None and item.can_retry_write:
+            self.btnAccept.setText("Retry write   Enter")
+        elif self.candidateStrip.count():
+            self.btnAccept.setText(f"Accept match {self.candidateStrip.current_index() + 1}   Enter")
+        else:
+            self.btnAccept.setText("Accept match   Enter")
 
     def _message_for(self, item: ReviewItem) -> str:
         if item.outcome == Outcome.tagged:
@@ -743,25 +1154,34 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             return f"{item.reason}. Check the file isn't read-only or open elsewhere, then retry."
         return f"{item.reason}. Search by hand, or open it in the editor to see more."
 
-    def _candidate_changed(self, row: int, _col: int, prev_row: int, _prev_col: int) -> None:
-        if row == prev_row:
-            return
+    def _candidate_changed(self, index: int) -> None:
         match = self.current_candidate()
         if match is not None:
             self._show_candidate_md(match.md)
+        self._label_accept()
 
     def _show_candidate_md(self, md: GenericMetadata) -> None:
-        urls = [image.URL for image in [md._cover_image, *md._alternate_images] if image]
-        self.candidateCover.set_url_list(urls)
+        if self.candidateArea.currentWidget() is not self.candidateStrip:
+            urls = [image.URL for image in [md._cover_image, *md._alternate_images] if image]
+            self.matchCover.setVisible(bool(urls))
+            self.matchCover.set_url_list(urls[:1])
         rows = metadata_diff(self._current_md, md)
         self.diffTable.setRowCount(len(rows))
+        ink, muted, ok = QtGui.QColor(self.colors["ink"]), QtGui.QColor(self.colors["muted"]), self.colors["ok"]
         for r, (label, old, new) in enumerate(rows):
+            changed = old != new
             for c, text in enumerate((label, old, new)):
                 cell = QtWidgets.QTableWidgetItem(text)
-                if c == 2 and old != new:
-                    font = cell.font()
-                    font.setBold(True)
-                    cell.setFont(font)
+                font = cell.font()
+                if c == 0:
+                    cell.setForeground(muted)
+                elif c == 1:
+                    cell.setForeground(muted)
+                    font.setStrikeOut(changed and old != "—")
+                else:
+                    cell.setForeground(QtGui.QColor(ok) if changed else ink)
+                    font.setWeight(QtGui.QFont.Weight.DemiBold if changed else QtGui.QFont.Weight.Normal)
+                cell.setFont(font)
                 self.diffTable.setItem(r, c, cell)
         self.diffTable.resizeColumnsToContents()
         self.diffTable.horizontalHeader().setStretchLastSection(True)

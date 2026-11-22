@@ -96,6 +96,7 @@ class SearchPanel(QtWidgets.QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("searchPanel")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.literal = False
         self._loaded_series_id: str | None = None
         self.config: ct_ns | None = None
@@ -132,6 +133,7 @@ class SearchPanel(QtWidgets.QWidget):
 
         self.btnUse = QtWidgets.QPushButton("Use this issue")
         self.btnUse.setDefault(True)
+        self.btnUse.setProperty("primary", True)
         self.btnUse.setEnabled(False)
         self.btnUse.clicked.connect(self.choose)
         self.btnCancel = QtWidgets.QPushButton(cancel_text)
@@ -159,6 +161,7 @@ class SearchPanel(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         layout.addLayout(query)
         layout.addWidget(self.status)
         layout.addLayout(body, 1)

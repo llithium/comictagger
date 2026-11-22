@@ -110,7 +110,7 @@ def panel(run, config, qtbot):
 def test_panel_opens_on_items_that_need_review(panel):
     assert panel.categoryList.currentItem().text() == "Needs review  (2)"
     assert panel.current_item().name == "saga.cbz"
-    assert panel.candidateTable.rowCount() == 2
+    assert panel.candidateStrip.count() == 2
     assert panel.current_candidate().md.issue_id == "1"
     assert panel.btnAccept.isEnabled()
     assert panel.diffTable.rowCount() > 0
@@ -123,7 +123,7 @@ def test_accepting_a_match_writes_it_and_moves_to_the_next_archive(panel, qtbot,
         "write_match",
         lambda parent, ca, issue_id, config, talker: written.append((ca.path.name, issue_id)) or GenericMetadata(),
     )
-    panel.candidateTable.setCurrentCell(1, 0)
+    panel.candidateStrip.set_current(1)
 
     with qtbot.waitSignal(panel.matchesWritten) as signal:
         panel.accept_current()
@@ -167,7 +167,8 @@ def test_no_match_archives_are_fixed_with_the_embedded_search(panel, qtbot, monk
     panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
     assert panel.current_item().name == "lost.cbz"
     assert not panel.btnAccept.isEnabled()
-    assert panel.candidateArea.currentWidget() is panel.messageLabel
+    assert panel.candidateArea.currentWidget() is not panel.candidateStrip
+    assert panel.messageLabel.isVisibleTo(panel)
 
     panel.btnSearch.click()
 
@@ -225,12 +226,12 @@ def test_results_fill_in_during_a_run(run, config, qtbot, tmp_path):
 
     panel.add_result(results.multiple_matches[0])
     assert panel.current_item().name == "saga.cbz"
-    panel.candidateTable.setCurrentCell(1, 0)
+    panel.candidateStrip.set_current(1)
 
     panel.add_result(results.low_confidence_matches[0])
     # Reviewing saga.cbz isn't interrupted by fables.cbz arriving in the same group.
     assert panel.current_item().name == "saga.cbz"
-    assert panel.candidateTable.currentRow() == 1
+    assert panel.candidateStrip.current_index() == 1
     assert panel.fileList.count() == 2
 
     with qtbot.waitSignal(panel.stopRequested):
@@ -262,7 +263,7 @@ def test_write_failures_can_be_retried(tmp_path, config, qtbot, monkeypatch):
         autotagreview, "write_selected_tags", lambda ca, md, ids: writes.append(md.series) or ([], None)
     )
 
-    assert panel.btnAccept.text() == "Retry write"
+    assert panel.btnAccept.text().startswith("Retry write")
     panel.accept_current()
 
     assert writes == ["Low"]
@@ -281,7 +282,7 @@ def test_workspace_shows_review_dock_without_modal_dialogs(workspace, run, monke
 
     workspace.auto_tag_finished(results, [], config=workspace.config[0], archives=archives)
 
-    assert workspace.autoTagReviewDock.isVisible()
+    assert workspace.in_review()
     assert workspace.autoTagReview.current_item().name == "saga.cbz"
     assert "2 need review, 1 with no match, 1 error, 1 tagged" in workspace.statusBar().currentMessage()
 
@@ -301,7 +302,7 @@ def test_workspace_run_does_not_block_and_skips_files_saved_by_hand(workspace, r
     workspace._start_auto_tag(settings)
 
     thread = started[0]
-    assert workspace.autoTagReviewDock.isVisible()
+    assert workspace.in_review()
     assert not workspace.atprogdialog.isVisible()
     assert not workspace.actionAutoTag.isEnabled()
     row, first = workspace.fileSelectionList.get_current_list_row(str(archives[0].path))
