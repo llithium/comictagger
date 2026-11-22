@@ -44,8 +44,8 @@ from comicapi.genericmetadata import Credit, FileHash, GenericMetadata
 from comicapi.issuestring import IssueString
 from comictaggerlib import ctsettings, ctversion
 from comictaggerlib.applicationlogwindow import ApplicationLogWindow, QTextEditLogger
-from comictaggerlib.autotagmatchwindow import AutoTagMatchWindow
 from comictaggerlib.autotagprogresswindow import AutoTagProgressWindow, AutoTagThread
+from comictaggerlib.autotagreview import AutoTagReviewPanel
 from comictaggerlib.autotagstartwindow import AutoTagSettings, AutoTagStartWindow
 from comictaggerlib.cbltransformer import CBLTransformer
 from comictaggerlib.coverimagewidget import CoverImageWidget
@@ -201,6 +201,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         grid_layout.addWidget(self.fileSelectionList)
 
         self.fileSelectionList.selectionChanged.connect(self.load_archive)
+        self.setup_auto_tag_review()
         self.fileSelectionList.listCleared.connect(self.file_list_cleared)
         self.fileSelectionList.set_sorting(
             self.config[0].internal__sort_column, QtCore.Qt.SortOrder(self.config[0].internal__sort_direction)
@@ -1467,6 +1468,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.metadata = reloaded_metadata
         self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
+        self.autoTagReview.mark_fixed(self.comic_archive)
         return True
 
     def select_read_tags(self, tag_ids: list[str]) -> None:
@@ -2146,51 +2148,59 @@ class TaggerWindow(QtWidgets.QMainWindow):
             summary += f"Archives that failed due to tag reading errors: {len(match_results.read_failures)}<br/>"
 
         self.auto_tag_log(summary)
-
-        selectable = match_results.multiple_matches or match_results.low_confidence_matches
-
-        title = "Auto-Tag Summary"
-        if not selectable:
-            logger.info(summary)
-            OptionalMessageDialog.msg_no_checkbox(
-                self,
-                title,
-                summary,
-                icon=OptionalMessageDialog.Icon.Information,
-            )
-            return
-
-        summary += (
-            "\n\nDo you want to manually select the ones with multiple matches and/or low-confidence matches now?"
-        )
         logger.info(summary)
-        OptionalMessageDialog.question(
-            self,
-            title,
-            summary,
-            check_text=None,
-        ).accepted.connect(
-            functools.partial(self.open_auto_tag_match_window, match_results, config=config, archives=archives)
-        )
+        self.show_auto_tag_review(match_results, config=config, archives=archives)
 
-    def open_auto_tag_match_window(
+    def setup_auto_tag_review(self) -> None:
+        self.autoTagReview = AutoTagReviewPanel(None, self.config[0].Runtime_Options__config.user_cache_dir)
+        self.autoTagReviewDock = QtWidgets.QDockWidget("Auto-Tag Review", self)
+        self.autoTagReviewDock.setObjectName("autoTagReviewDock")
+        self.autoTagReviewDock.setWidget(self.autoTagReview)
+        self.autoTagReviewDock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.autoTagReviewDock)
+        self.autoTagReviewDock.hide()
+        review_action = self.autoTagReviewDock.toggleViewAction()
+        review_action.setText("Auto-Tag Review")
+        self.menuWindow.addAction(review_action)
+        self.autoTagReview.searchRequested.connect(self.review_search_archive)
+        self.autoTagReview.openRequested.connect(self.review_open_archive)
+        self.autoTagReview.matchesWritten.connect(self.review_matches_written)
+
+    def show_auto_tag_review(
         self, match_results: OnlineMatchResults, *, config: ct_ns, archives: list[ComicArchive]
     ) -> None:
-        candidates = [*match_results.multiple_matches, *match_results.low_confidence_matches]
-        auto_tagged_archives = {a.path: a for a in archives}
-        matchdlg = AutoTagMatchWindow(
-            self,
-            [(m, auto_tagged_archives[m.original_path]) for m in candidates],
-            config,
-            self.current_talker(),
-        )
+        self.autoTagReview.load_results(match_results, archives, config, self.current_talker())
+        self.autoTagReviewDock.show()
+        self.autoTagReviewDock.raise_()
+        self.resizeDocks([self.autoTagReviewDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
+        self.autoTagReview.fileList.setFocus()
+        self.statusBar().showMessage(self.autoTagReview.summary())
 
-        matchdlg.open()
-        matchdlg.finished.connect(self._reload_page)
-        if config.internal__remove_archive_after_successful_match:
-            matchdlg.matched_files.connect(self.fileSelectionList.remove_archive_list)
+    def _select_archive_in_list(self, archive: ComicArchive) -> bool:
+        row, _ = self.fileSelectionList.get_current_list_row(str(archive.path))
+        if row < 0:
+            self.statusBar().showMessage(f"{archive.path.name} is no longer in the file list", 5000)
+            return False
+        if self.fileSelectionList.get_current_archive() is not archive:
+            self.fileSelectionList.twList.selectRow(row)
+        return self.comic_archive is archive
+
+    def review_open_archive(self, archive: ComicArchive) -> None:
+        if self._select_archive_in_list(archive):
+            self.leSeries.setFocus()
+
+    def review_search_archive(self, archive: ComicArchive) -> None:
+        if self._select_archive_in_list(archive):
+            self.query_online()
+
+    def review_matches_written(self, archives: list[ComicArchive]) -> None:
+        config = self.autoTagReview.config
+        if config is not None and config.internal__remove_archive_after_successful_match:
+            self.fileSelectionList.remove_archive_list(archives)
+            self.autoTagReview.remove_archives(archives)
         else:
-            matchdlg.matched_files.connect(self.fileSelectionList.show_manual_matches)
+            self.fileSelectionList.show_manual_matches(archives)
+        self._reload_page()
 
     def _reload_page(self) -> None:
         self.fileSelectionList.update_selected_rows()
