@@ -21,6 +21,7 @@ from comictaggerlib.resulttypes import (
     Score,
     Status,
 )
+from comictaggerlib.searchpanel import best_issue_row
 from testing.filenames import cbz_path
 
 
@@ -120,8 +121,7 @@ def test_accepting_a_match_writes_it_and_moves_to_the_next_archive(panel, qtbot,
     monkeypatch.setattr(
         autotagreview,
         "write_match",
-        lambda parent, ca, match, config, talker: written.append((ca.path.name, match.md.issue_id))
-        or GenericMetadata(),
+        lambda parent, ca, issue_id, config, talker: written.append((ca.path.name, issue_id)) or GenericMetadata(),
     )
     panel.candidateTable.setCurrentCell(1, 0)
 
@@ -145,15 +145,99 @@ def test_failed_write_keeps_the_archive_in_review(panel, monkeypatch):
     assert panel.item_for(panel.current_item().archive).outcome == Outcome.needs_review
 
 
-def test_no_match_archives_offer_search_instead_of_accept(panel, qtbot):
-    panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
+def series_result(name: str, series_id: str, year: int) -> ComicSeries:
+    return ComicSeries(series_id, name, set(), 80, None, "", "", "Image", year, None)
 
+
+def test_no_match_archives_are_fixed_with_the_embedded_search(panel, qtbot, monkeypatch):
+    panel.talker.name = "Test"
+    panel.talker.search_for_series.return_value = [
+        series_result("Lost Girls", "s2", 1991),
+        series_result("Lost", "s1", 2004),
+    ]
+    panel.talker.fetch_issues_in_series.return_value = [
+        GenericMetadata(series="Lost", issue=str(n), issue_id=f"i{n}", year=2004) for n in (3, 1, 2)
+    ]
+    written = []
+    monkeypatch.setattr(
+        autotagreview,
+        "write_match",
+        lambda parent, ca, issue_id, config, talker: written.append(issue_id) or GenericMetadata(),
+    )
+    panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
     assert panel.current_item().name == "lost.cbz"
     assert not panel.btnAccept.isEnabled()
     assert panel.candidateArea.currentWidget() is panel.messageLabel
-    with qtbot.waitSignal(panel.searchRequested) as signal:
-        panel.btnSearch.click()
-    assert signal.args[0].path.name == "lost.cbz"
+
+    panel.btnSearch.click()
+
+    search = panel.searchPanel
+    assert panel.bodyStack.currentWidget() is search
+    assert search.leSeries.text().casefold() == "lost"
+    qtbot.waitUntil(lambda: search.issueTable.rowCount() == 3)
+    assert search.current_series().name == "Lost"  # exact name sorted first
+    assert [search.issueTable.item(r, 0).text() for r in range(3)] == ["1", "2", "3"]
+    search.leIssue.setText("2")
+    search._issue_number_changed()
+    assert search.current_issue().issue_id == "i2"
+
+    search.btnUse.click()
+
+    assert written == ["i2"]
+    lost = next(i for i in panel.items if i.name == "lost.cbz")
+    assert (lost.outcome, lost.resolution) == (Outcome.tagged, "Picked by search")
+    assert panel.bodyStack.currentWidget() is panel.reviewPage
+
+
+def test_search_errors_are_shown_in_the_panel(panel, qtbot):
+    from comictalker.comictalker import TalkerNetworkError
+
+    panel.talker.name = "Test"
+    panel.talker.search_for_series.side_effect = TalkerNetworkError("Test", 2, "offline")
+    panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
+
+    panel.search_current()
+
+    qtbot.waitUntil(lambda: "couldn't search" in panel.searchPanel.status.text())
+    panel._escape()
+    assert panel.bodyStack.currentWidget() is panel.reviewPage
+
+
+def test_best_issue_row_matches_padded_numbers():
+    issues = [GenericMetadata(issue=n) for n in ("1", "2", "10")]
+
+    assert best_issue_row(issues, "002") == 1
+    assert best_issue_row(issues, "99") == 0
+
+
+def test_results_fill_in_during_a_run(run, config, qtbot, tmp_path):
+    results, archives = run
+    panel = AutoTagReviewPanel(None, config[0].Runtime_Options__config.user_cache_dir)
+    qtbot.addWidget(panel)
+    panel.begin_run(archives, config[0], Mock(attribution=""))
+    assert panel.runBar.isVisibleTo(panel)
+    assert "as each archive is done" in panel.emptyLabel.text()
+
+    tagged = results.good_matches[0]
+    panel.add_result(tagged)
+    assert panel.categoryList.item(0).text() == "Needs review  (0)"
+    assert panel.categoryList.item(3).text() == "Tagged  (1)"
+
+    panel.add_result(results.multiple_matches[0])
+    assert panel.current_item().name == "saga.cbz"
+    panel.candidateTable.setCurrentCell(1, 0)
+
+    panel.add_result(results.low_confidence_matches[0])
+    # Reviewing saga.cbz isn't interrupted by fables.cbz arriving in the same group.
+    assert panel.current_item().name == "saga.cbz"
+    assert panel.candidateTable.currentRow() == 1
+    assert panel.fileList.count() == 2
+
+    with qtbot.waitSignal(panel.stopRequested):
+        panel.btnStop.click()
+    panel.finish_run()
+    assert not panel.runBar.isVisibleTo(panel)
+    assert panel.summary() == "Auto-Tag finished: 2 need review, 1 tagged"
 
 
 def test_saving_by_hand_resolves_the_archive(panel):
@@ -202,15 +286,36 @@ def test_workspace_shows_review_dock_without_modal_dialogs(workspace, run, monke
     assert "2 need review, 1 with no match, 1 error, 1 tagged" in workspace.statusBar().currentMessage()
 
 
-def test_workspace_search_by_hand_loads_archive_and_searches(workspace, run, monkeypatch):
+def test_workspace_run_does_not_block_and_skips_files_saved_by_hand(workspace, run, monkeypatch, qtbot):
+    from comictaggerlib import taggerwindow
+
     results, archives = run
     for archive in archives:
         workspace.fileSelectionList.add_path_item(str(archive.path))
-    archives = [workspace.fileSelectionList.get_current_list_row(str(a.path))[1] for a in archives]
-    searches = []
-    monkeypatch.setattr(workspace, "query_online", lambda: searches.append(workspace.comic_archive.path.name))
-    workspace.auto_tag_finished(results, [], config=workspace.config[0], archives=archives)
+    workspace.fileSelectionList.select_all()
+    started = []
+    monkeypatch.setattr(taggerwindow.AutoTagThread, "start", lambda thread: started.append(thread))
+    monkeypatch.setattr(taggerwindow.AutoTagThread, "isRunning", lambda thread: thread in started)
+    settings = Mock(search_string="", new_settings=lambda config: config)
 
-    workspace.review_search_archive(archives[2])
+    workspace._start_auto_tag(settings)
 
-    assert searches == ["lost.cbz"]
+    thread = started[0]
+    assert workspace.autoTagReviewDock.isVisible()
+    assert not workspace.atprogdialog.isVisible()
+    assert not workspace.actionAutoTag.isEnabled()
+    row, first = workspace.fileSelectionList.get_current_list_row(str(archives[0].path))
+    workspace.fileSelectionList.twList.selectRow(row)
+    assert workspace.comic_archive is first
+    workspace.leSeries.setText("Saved by hand")
+    workspace.set_dirty_flag()
+    monkeypatch.setattr(taggerwindow.OptionalMessageDialog, "warning", Mock())
+    assert workspace.write_tags()
+    assert first.path in thread.skip_paths
+
+    thread.autoTagResult.emit(results.multiple_matches[0])
+    assert workspace.autoTagReview.current_item().name == "saga.cbz"
+    started.clear()
+    thread.autoTagComplete.emit(results, [])
+    assert workspace.actionAutoTag.isEnabled()
+    assert not workspace.autoTagReview.running

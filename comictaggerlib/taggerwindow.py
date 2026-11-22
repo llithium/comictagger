@@ -62,7 +62,7 @@ from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.pagebrowser import PageBrowserWindow
 from comictaggerlib.pagelisteditor import PageListEditor
 from comictaggerlib.renamewindow import RenameWindow
-from comictaggerlib.resulttypes import OnlineMatchResults
+from comictaggerlib.resulttypes import OnlineMatchResults, Result
 from comictaggerlib.seriesselectionwindow import SeriesSelectionWindow
 from comictaggerlib.settingswindow import SettingsWindow
 from comictaggerlib.ui import qtutils, ui_path
@@ -1469,6 +1469,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
         self.autoTagReview.mark_fixed(self.comic_archive)
+        if self.auto_tag_running():
+            self.autotagthread.skip_paths.add(self.comic_archive.path)
         return True
 
     def select_read_tags(self, tag_ids: list[str]) -> None:
@@ -2057,6 +2059,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             QtCore.QCoreApplication.processEvents()
 
     def auto_tag(self) -> None:
+        if self.auto_tag_running():
+            self._show_review_dock()
+            return
         ca_list = self.fileSelectionList.get_selected_archive_list()
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
 
@@ -2087,28 +2092,67 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         ca_list = self.fileSelectionList.get_selected_archive_list()
         self.fileSelectionList.clear_auto_tag_results(ca_list)
+        if self.atprogdialog is not None:
+            self.atprogdialog.close()
+        # The progress window is now an optional details view; the run itself is shown in the review panel.
         self.atprogdialog = AutoTagProgressWindow(self, self.current_talker())
+        self.atprogdialog.setModal(False)
         self.atprogdialog.progressBar.setMaximum(len(ca_list))
         self.atprogdialog.setWindowTitle("Auto-Tagging")
+        hide_button = self.atprogdialog.buttonBox.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        if hide_button is not None:
+            hide_button.setText("Hide")
+        # Closing the details window only hides it; Stop in the review panel cancels the run.
+        self.atprogdialog.cancel.connect(self.atprogdialog.hide)
 
-        center_window_on_parent(self.atprogdialog)
         temp_config = auto_tag.new_settings(self.config[0])
         self.autotagthread = AutoTagThread(auto_tag.search_string, ca_list, temp_config, self.current_talker())
 
         self.autotagthread.autoTagComplete.connect(
             functools.partial(self.auto_tag_finished, config=temp_config, archives=ca_list)
         )
+        self.autotagthread.autoTagResult.connect(self.auto_tag_result)
         self.autotagthread.autoTagLogMsg.connect(self.auto_tag_log)
         self.autotagthread.autoTagProgress.connect(self.atprogdialog.on_progress)
+        self.autotagthread.autoTagProgress.connect(self._auto_tag_progress)
         self.autotagthread.ratelimit.connect(self.ratelimit)
 
-        # We don't use rejected as that closes the dialog
-        self.atprogdialog.cancel.connect(self.autotagthread.cancel)
+        self.autoTagReview.begin_run(ca_list, temp_config, self.current_talker())
+        self._show_review_dock()
+        self.actionAutoTag.setEnabled(False)
 
         self.auto_tag_log("==========================================================================\n")
         self.auto_tag_log(f"Auto-Tagging Started for {len(ca_list)} items\n")
         self.autotagthread.start()
-        self.atprogdialog.open()
+
+    def _auto_tag_progress(self, cur: int | None, total: int | None, path: object, *_images: bytes) -> None:
+        if cur is not None and total is not None:
+            self.autoTagReview.set_progress(cur, total, path)
+
+    def auto_tag_running(self) -> bool:
+        thread = getattr(self, "autotagthread", None)
+        return thread is not None and thread.isRunning()
+
+    def auto_tag_result(self, result: Result) -> None:
+        """Show one archive's outcome while the rest of the run continues."""
+        self.autoTagReview.add_result(result)
+        single = OnlineMatchResults()
+        single.record(result)
+        self.fileSelectionList.show_auto_tag_results(single)
+        row, archive = self.fileSelectionList.get_current_list_row(str(result.original_path))
+        if row >= 0:
+            self.fileSelectionList.update_row(row)
+            if archive is self.comic_archive and not self.dirty_flag:
+                self.load_archive(archive)
+
+    def show_auto_tag_log(self) -> None:
+        if self.atprogdialog is not None:
+            self.atprogdialog.show()
+            self.atprogdialog.raise_()
+
+    def stop_auto_tag(self) -> None:
+        if self.auto_tag_running():
+            self.autotagthread.cancel()
 
     def auto_tag_finished(
         self,
@@ -2119,15 +2163,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         archives: list[ComicArchive],
     ) -> None:
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
-        if self.atprogdialog:
-            self.atprogdialog.accept()
+        self.actionAutoTag.setEnabled(True)
 
         self.fileSelectionList.remove_archive_list(archives_to_remove)
         if match_results.good_matches:
             self.config[0].Dialog_Flags__show_disclaimer = False
         self.fileSelectionList.show_auto_tag_results(match_results)
-        self._reload_page()
-        self.atprogdialog = None
+        self._reload_page_if_clean()
 
         summary = f"<p>{self.current_talker().attribution}</p>"
         summary += f"Successfully added {tag_names} tags to {len(match_results.good_matches)} archive(s)<br/>"
@@ -2149,7 +2191,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.auto_tag_log(summary)
         logger.info(summary)
-        self.show_auto_tag_review(match_results, config=config, archives=archives)
+        if self.autoTagReview.running:
+            self.autoTagReview.finish_run()
+            self.statusBar().showMessage(self.autoTagReview.summary())
+        else:
+            self.show_auto_tag_review(match_results, config=config, archives=archives)
 
     def setup_auto_tag_review(self) -> None:
         self.autoTagReview = AutoTagReviewPanel(None, self.config[0].Runtime_Options__config.user_cache_dir)
@@ -2162,17 +2208,22 @@ class TaggerWindow(QtWidgets.QMainWindow):
         review_action = self.autoTagReviewDock.toggleViewAction()
         review_action.setText("Auto-Tag Review")
         self.menuWindow.addAction(review_action)
-        self.autoTagReview.searchRequested.connect(self.review_search_archive)
         self.autoTagReview.openRequested.connect(self.review_open_archive)
         self.autoTagReview.matchesWritten.connect(self.review_matches_written)
+        self.autoTagReview.stopRequested.connect(self.stop_auto_tag)
+        self.autoTagReview.logRequested.connect(self.show_auto_tag_log)
+        self.autoTagReview.ratelimit.connect(self.on_ratelimit)
+
+    def _show_review_dock(self) -> None:
+        self.autoTagReviewDock.show()
+        self.autoTagReviewDock.raise_()
+        self.resizeDocks([self.autoTagReviewDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
 
     def show_auto_tag_review(
         self, match_results: OnlineMatchResults, *, config: ct_ns, archives: list[ComicArchive]
     ) -> None:
         self.autoTagReview.load_results(match_results, archives, config, self.current_talker())
-        self.autoTagReviewDock.show()
-        self.autoTagReviewDock.raise_()
-        self.resizeDocks([self.autoTagReviewDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
+        self._show_review_dock()
         self.autoTagReview.fileList.setFocus()
         self.statusBar().showMessage(self.autoTagReview.summary())
 
@@ -2189,10 +2240,6 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if self._select_archive_in_list(archive):
             self.leSeries.setFocus()
 
-    def review_search_archive(self, archive: ComicArchive) -> None:
-        if self._select_archive_in_list(archive):
-            self.query_online()
-
     def review_matches_written(self, archives: list[ComicArchive]) -> None:
         config = self.autoTagReview.config
         if config is not None and config.internal__remove_archive_after_successful_match:
@@ -2200,7 +2247,14 @@ class TaggerWindow(QtWidgets.QMainWindow):
             self.autoTagReview.remove_archives(archives)
         else:
             self.fileSelectionList.show_manual_matches(archives)
-        self._reload_page()
+        self._reload_page_if_clean()
+
+    def _reload_page_if_clean(self) -> None:
+        """Refresh the list and editor without throwing away edits the user hasn't saved."""
+        if self.dirty_flag:
+            self.fileSelectionList.update_selected_rows()
+        else:
+            self._reload_page()
 
     def _reload_page(self) -> None:
         self.fileSelectionList.update_selected_rows()
@@ -2237,6 +2291,10 @@ class TaggerWindow(QtWidgets.QMainWindow):
         ):
             self._forget_issue_lookup()
             self.selector = None
+            if self.auto_tag_running():
+                self.autotagthread.cancel()
+                self.autotagthread.wait(10000)
+            self.autoTagReview.searchPanel.wait_for_idle()
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()
             self.config[0].internal__window_height = appsize.height()

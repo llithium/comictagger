@@ -24,7 +24,8 @@ from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.md import parse_archive_filename, prepare_metadata, read_configured_tags, write_selected_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
-from comictaggerlib.resulttypes import IssueResult, OnlineMatchResults, Result
+from comictaggerlib.resulttypes import Action, IssueResult, MatchStatus, OnlineMatchResults, Result, Status
+from comictaggerlib.searchpanel import SearchPanel, query_from_metadata
 from comictalker.comictalker import ComicTalker, TalkerError
 
 logger = logging.getLogger(__name__)
@@ -76,32 +77,54 @@ def _matches_reason(result: Result) -> str:
     return "1 possible match" if count == 1 else f"{count} possible matches"
 
 
+def classify(result: Result) -> tuple[Outcome, str] | None:
+    """The review group and reason for one archive's result, or None for results the review doesn't show."""
+    if result.status == Status.success and result.action == Action.save:
+        return Outcome.tagged, "Tagged"
+    if result.status == Status.read_failure:
+        return Outcome.error, "Couldn't read existing tags"
+    if result.status == Status.write_failure and result.action == Action.save:
+        return Outcome.error, "Couldn't write tags"
+    if result.status == Status.fetch_data_failure:
+        return Outcome.error, "Couldn't fetch issue details"
+    if result.status == Status.match_failure:
+        if result.match_status == MatchStatus.no_match:
+            return Outcome.no_match, "No match found"
+        if result.match_status == MatchStatus.multiple_match:
+            return Outcome.needs_review, _matches_reason(result)
+        if result.match_status == MatchStatus.low_confidence_match:
+            return Outcome.needs_review, "Low confidence"
+    return None
+
+
+def make_item(result: Result, archive: ComicArchive) -> ReviewItem | None:
+    found = classify(result)
+    return ReviewItem(archive, found[0], found[1], result) if found is not None else None
+
+
+def skipped_item(archive: ComicArchive) -> ReviewItem | None:
+    """The run skips read-only archives without recording a result, so they're added when it ends."""
+    return None if archive.is_writable() else ReviewItem(archive, Outcome.error, "File is read-only")
+
+
 def build_review_items(match_results: OnlineMatchResults, archives: Iterable[ComicArchive]) -> list[ReviewItem]:
     """Sort the archives of a finished run into review groups, keeping the run's order inside each group."""
-    by_path = {archive.path: archive for archive in archives}
-    found: dict[object, ReviewItem] = {}
-
-    def add(results: list[Result], outcome: Outcome, reason: Callable[[Result], str]) -> None:
-        for result in results:
-            archive = by_path.get(result.original_path)
-            if archive is not None:
-                found[archive.path] = ReviewItem(archive, outcome, reason(result), result)
-
-    add(match_results.multiple_matches, Outcome.needs_review, _matches_reason)
-    add(match_results.low_confidence_matches, Outcome.needs_review, lambda r: "Low confidence")
-    add(match_results.no_matches, Outcome.no_match, lambda r: "No match found")
-    add(match_results.fetch_data_failures, Outcome.error, lambda r: "Couldn't fetch issue details")
-    add(match_results.write_failures, Outcome.error, lambda r: "Couldn't write tags")
-    add(match_results.read_failures, Outcome.error, lambda r: "Couldn't read existing tags")
-    add(match_results.good_matches, Outcome.tagged, lambda r: "Tagged")
-
+    results = [
+        *match_results.good_matches,
+        *match_results.no_matches,
+        *match_results.multiple_matches,
+        *match_results.low_confidence_matches,
+        *match_results.write_failures,
+        *match_results.fetch_data_failures,
+        *match_results.read_failures,
+    ]
+    by_path = {result.original_path: result for result in results}
     items = []
-    for archive in by_path.values():
-        if archive.path in found:
-            items.append(found[archive.path])
-        elif not archive.is_writable():
-            # The run skips read-only archives without recording a result.
-            items.append(ReviewItem(archive, Outcome.error, "File is read-only"))
+    for archive in archives:
+        result = by_path.get(archive.path)
+        item = make_item(result, archive) if result is not None else skipped_item(archive)
+        if item is not None:
+            items.append(item)
     return items
 
 
@@ -136,9 +159,9 @@ def metadata_diff(current: GenericMetadata, candidate: GenericMetadata) -> list[
 
 
 def write_match(
-    parent: QtWidgets.QWidget, ca: ComicArchive, match: IssueResult, config: ct_ns, talker: ComicTalker
+    parent: QtWidgets.QWidget, ca: ComicArchive, issue_id: str, config: ct_ns, talker: ComicTalker
 ) -> GenericMetadata | None:
-    """Fetch the full issue for a chosen candidate and write it to the archive. Reports problems to the user."""
+    """Fetch the full issue for a chosen match and write it to the archive. Reports problems to the user."""
     md, _, error = read_configured_tags(ca, config.Runtime_Options__tags_read, config)
     if error is not None:
         logger.error("Failed to load tags for %s: %s", ca.path, error)
@@ -152,8 +175,7 @@ def write_match(
     QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
     try:
         try:
-            assert match.md.issue_id
-            ct_md = talker.fetch_comic_data(issue_id=match.md.issue_id)
+            ct_md = talker.fetch_comic_data(issue_id=issue_id)
         except TalkerError as e:
             QtWidgets.QApplication.restoreOverrideCursor()
             OptionalMessageDialog.critical(parent, f"{e.source} {e.code_name} Error", str(e))
@@ -187,9 +209,11 @@ def _shortcut(widget: QtWidgets.QWidget, keys: str, slot: Callable[[], object]) 
 class AutoTagReviewPanel(QtWidgets.QWidget):
     """Inbox-style review of the latest Auto-Tag run."""
 
-    searchRequested = QtCore.pyqtSignal(object)  # ComicArchive
     openRequested = QtCore.pyqtSignal(object)  # ComicArchive
     matchesWritten = QtCore.pyqtSignal(list)  # list[ComicArchive]
+    stopRequested = QtCore.pyqtSignal()
+    ratelimit = QtCore.pyqtSignal(float, float)
+    logRequested = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None, cache_dir: pathlib.Path | None) -> None:
         super().__init__(parent)
@@ -199,6 +223,8 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.talker: ComicTalker | None = None
         self._outcome = Outcome.needs_review
         self._current_md = GenericMetadata()
+        self._run_archives: list[ComicArchive] = []
+        self.running = False
 
         self.categoryList = QtWidgets.QListWidget()
         self.categoryList.setAccessibleName("Result groups")
@@ -257,7 +283,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.btnAccept.setToolTip("Write the selected match to the archive (Enter)")
         self.btnAccept.setDefault(True)
         self.btnSearch = QtWidgets.QPushButton("Search by hand")
-        self.btnSearch.setToolTip("Open the archive in the editor and search online (/)")
+        self.btnSearch.setToolTip("Find the right series and issue yourself (/)")
         self.btnOpen = QtWidgets.QPushButton("Open in editor")
         self.btnOpen.setToolTip("Load the archive into the editor (E)")
         self.btnSkip = QtWidgets.QPushButton("Skip")
@@ -278,7 +304,6 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.candidateArea.addWidget(self.messageLabel)
 
         compare = QtWidgets.QHBoxLayout()
-        compare.addWidget(self.archiveCover)
         compare.addWidget(self.candidateArea, 1)
         compare.addWidget(self.candidateCover)
 
@@ -290,12 +315,31 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         hint.setEnabled(False)
         buttons.addWidget(hint)
 
+        review_page = QtWidgets.QWidget()
+        review_layout = QtWidgets.QVBoxLayout(review_page)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.addLayout(compare, 3)
+        review_layout.addWidget(self.diffTable, 2)
+        review_layout.addLayout(buttons)
+        self.reviewPage = review_page
+
+        self.searchPanel = SearchPanel(None, cache_dir)
+        self.searchPanel.issueChosen.connect(self._search_chose)
+        self.searchPanel.canceled.connect(self._leave_search)
+        self.searchPanel.ratelimit.connect(self.ratelimit)
+
+        self.bodyStack = QtWidgets.QStackedWidget()
+        self.bodyStack.addWidget(review_page)
+        self.bodyStack.addWidget(self.searchPanel)
+
+        body = QtWidgets.QHBoxLayout()
+        body.addWidget(self.archiveCover, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        body.addWidget(self.bodyStack, 1)
+
         detail = QtWidgets.QWidget()
         detail_layout = QtWidgets.QVBoxLayout(detail)
         detail_layout.addLayout(header)
-        detail_layout.addLayout(compare, 3)
-        detail_layout.addWidget(self.diffTable, 2)
-        detail_layout.addLayout(buttons)
+        detail_layout.addLayout(body, 1)
         self.detail = detail
 
         self.emptyLabel = QtWidgets.QLabel("Nothing in this group.")
@@ -325,8 +369,28 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         splitter.setSizes([160, 260, 700])
         self.splitter = splitter
 
+        self.progressBar = QtWidgets.QProgressBar()
+        self.progressBar.setAccessibleName("Auto-Tag progress")
+        self.progressLabel = QtWidgets.QLabel()
+        self.progressLabel.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.btnLog = QtWidgets.QPushButton("Show details")
+        self.btnLog.setToolTip("Show the covers being compared and the run's log")
+        self.btnLog.clicked.connect(self.logRequested)
+        self.btnStop = QtWidgets.QPushButton("Stop")
+        self.btnStop.setToolTip("Stop after the archive being identified now")
+        self.btnStop.clicked.connect(self._stop)
+        self.runBar = QtWidgets.QWidget()
+        run_layout = QtWidgets.QHBoxLayout(self.runBar)
+        run_layout.setContentsMargins(6, 4, 6, 4)
+        run_layout.addWidget(self.progressLabel)
+        run_layout.addWidget(self.progressBar, 1)
+        run_layout.addWidget(self.btnLog)
+        run_layout.addWidget(self.btnStop)
+        self.runBar.hide()
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.runBar)
         layout.addWidget(splitter)
 
         _shortcut(self, "Return", self.accept_current)
@@ -336,6 +400,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         _shortcut(self, "S", self.next_item)
         _shortcut(self, "J", self.next_item)
         _shortcut(self, "K", self.previous_item)
+        _shortcut(self, "Escape", self._escape)
 
         self._refresh()
 
@@ -349,12 +414,81 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         talker: ComicTalker,
     ) -> None:
         self.items = build_review_items(match_results, archives)
-        self.config = config
-        self.talker = talker
-        self.attributionLabel.setText(talker.attribution)
+        self._set_source(config, talker)
         first = next((o for o in Outcome if self.items_in(o)), Outcome.tagged)
         self._outcome = first
         self._refresh()
+
+    def _set_source(self, config: ct_ns, talker: ComicTalker) -> None:
+        self.config = config
+        self.talker = talker
+        self.attributionLabel.setText(talker.attribution)
+
+    # ----- live runs -----
+
+    def begin_run(self, archives: list[ComicArchive], config: ct_ns, talker: ComicTalker) -> None:
+        """Start an empty review that fills in while Auto-Tag works through the archives."""
+        self.items = []
+        self._run_archives = list(archives)
+        self._set_source(config, talker)
+        self.running = True
+        self._outcome = Outcome.needs_review
+        self.progressBar.setRange(0, len(archives))
+        self.progressBar.setValue(0)
+        self.progressLabel.setText(f"Auto-tagging {len(archives)} archives…")
+        self.btnStop.setEnabled(True)
+        self.runBar.show()
+        self._refresh()
+
+    def set_progress(self, done: int, total: int, path: object) -> None:
+        self.progressBar.setRange(0, total)
+        self.progressBar.setValue(done)
+        name = getattr(path, "name", "")
+        self.progressLabel.setText(f"{done + 1} of {total}: {name}" if name else f"{done} of {total}")
+
+    def add_result(self, result: Result) -> None:
+        """Show one archive's outcome as soon as the run has it, without disturbing what's being reviewed."""
+        archive = next((a for a in self._run_archives if a.path == result.original_path), None)
+        item = make_item(result, archive) if archive is not None else None
+        if item is None:
+            return
+        existing = self.item_for(item.archive)
+        if existing is not None:
+            self.items.remove(existing)
+        self.items.append(item)
+        shown_group_empty = not any(i is not item for i in self.items_in(self._outcome))
+        if shown_group_empty and item.outcome not in (self._outcome, Outcome.tagged) and not self._searching():
+            # The group on screen was empty, so jump to the first one with work in it.
+            self._outcome = item.outcome
+            self._refresh()
+            return
+        self._update_counts()
+        if item.outcome == self._outcome:
+            self.fileList.addItem(self._list_entry(item))
+            if self.fileList.count() == 1:
+                self._refresh()
+            else:
+                self.positionLabel.setText(f"{self.fileList.currentRow() + 1} of {self.fileList.count()}")
+                self.btnSkip.setEnabled(self.fileList.currentRow() + 1 < self.fileList.count())
+
+    def finish_run(self) -> None:
+        self.running = False
+        self.runBar.hide()
+        for archive in self._run_archives:
+            if self.item_for(archive) is None:
+                item = skipped_item(archive)
+                if item is not None:
+                    self.items.append(item)
+        if not self.items_in(self._outcome) and not self._searching():
+            self._outcome = next((o for o in Outcome if self.items_in(o)), Outcome.tagged)
+            self._refresh()
+        else:
+            self._update_counts()
+
+    def _stop(self) -> None:
+        self.btnStop.setEnabled(False)
+        self.progressLabel.setText("Stopping after the current archive…")
+        self.stopRequested.emit()
 
     def items_in(self, outcome: Outcome) -> list[ReviewItem]:
         return [item for item in self.items if item.outcome == outcome]
@@ -377,7 +511,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             count = len(self.items_in(outcome))
             if count:
                 parts.append(f"{count} {words[outcome][count != 1]}")
-        return "Auto-Tag finished: " + ", ".join(parts) if parts else "Auto-Tag finished"
+        return "Auto-Tag finished: " + ", ".join(parts) if parts else "Auto-Tag finished with nothing to show"
 
     def current_item(self) -> ReviewItem | None:
         row = self.fileList.currentRow()
@@ -416,6 +550,15 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
             self._refresh(select_row=self.fileList.currentRow())
 
     def accept_current(self) -> None:
+        if self._searching():
+            focus = QtWidgets.QApplication.focusWidget()
+            if focus is self.searchPanel.leSeries:
+                self.searchPanel.search()
+            elif focus is self.searchPanel.leIssue:
+                self.searchPanel._issue_number_changed()
+            else:
+                self.searchPanel.choose()
+            return
         item = self.current_item()
         if item is None or self.config is None or not self.btnAccept.isEnabled():
             return
@@ -434,18 +577,50 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         match = self.current_candidate()
         if match is None or self.talker is None:
             return
-        md = write_match(self, item.archive, match, self.config, self.talker)
+        assert match.md.issue_id
+        self._write(item, match.md.issue_id, "Accepted")
+
+    def _write(self, item: ReviewItem, issue_id: str, resolution: str) -> bool:
+        assert self.config is not None and self.talker is not None
+        md = write_match(self, item.archive, issue_id, self.config, self.talker)
         if md is None:
-            return
+            return False
         if item.result is not None:
             item.result.md = md
-        self.resolve(item, "Accepted")
+        self.resolve(item, resolution)
         self.matchesWritten.emit([item.archive])
+        return True
 
     def search_current(self) -> None:
+        """Swap the matches for a series and issue search, prefilled from the archive."""
         item = self.current_item()
-        if item is not None:
-            self.searchRequested.emit(item.archive)
+        if item is None or self.config is None or self.talker is None:
+            return
+        md = self._current_md
+        if md.is_empty or not md.series:
+            md = parse_archive_filename(item.archive, self.config)
+        series, issue, year = query_from_metadata(md)
+        self.bodyStack.setCurrentWidget(self.searchPanel)
+        self.searchPanel.start(series, issue, year, self.config, self.talker)
+        if series:
+            self.searchPanel.seriesTable.setFocus()
+
+    def _searching(self) -> bool:
+        return self.detailStack.currentWidget() is self.detail and self.bodyStack.currentWidget() is self.searchPanel
+
+    def _search_chose(self, issue: GenericMetadata, _series: object) -> None:
+        item = self.current_item()
+        if item is None or not issue.issue_id:
+            return
+        self._write(item, issue.issue_id, "Picked by search")
+
+    def _leave_search(self) -> None:
+        self.bodyStack.setCurrentWidget(self.reviewPage)
+        self.fileList.setFocus()
+
+    def _escape(self) -> None:
+        if self._searching():
+            self.searchPanel.cancel()
 
     def open_current(self) -> None:
         item = self.current_item()
@@ -464,7 +639,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
 
     # ----- view -----
 
-    def _refresh(self, select_row: int = 0) -> None:
+    def _update_counts(self) -> None:
         self.categoryList.blockSignals(True)
         for row, outcome in enumerate(Outcome):
             count = len(self.items_in(outcome))
@@ -473,13 +648,19 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
                 self.categoryList.setCurrentRow(row)
         self.categoryList.blockSignals(False)
 
+    @staticmethod
+    def _list_entry(item: ReviewItem) -> QtWidgets.QListWidgetItem:
+        entry = QtWidgets.QListWidgetItem(f"{item.name}\n{item.reason}")
+        entry.setToolTip(str(item.archive.path))
+        return entry
+
+    def _refresh(self, select_row: int = 0) -> None:
+        self._update_counts()
         group = self.items_in(self._outcome)
         self.fileList.blockSignals(True)
         self.fileList.clear()
         for item in group:
-            entry = QtWidgets.QListWidgetItem(f"{item.name}\n{item.reason}")
-            entry.setToolTip(str(item.archive.path))
-            self.fileList.addItem(entry)
+            self.fileList.addItem(self._list_entry(item))
         self.fileList.blockSignals(False)
 
         if group:
@@ -495,10 +676,15 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
 
     def _file_changed(self, row: int) -> None:
         item = self.current_item()
+        if self._searching():
+            self.searchPanel.cancel()
+        self.bodyStack.setCurrentWidget(self.reviewPage)
         if item is None:
-            self.emptyLabel.setText(
-                "Nothing left to review here." if self._outcome != Outcome.tagged else "Nothing tagged yet."
-            )
+            if self.running:
+                text = "Results show up here as each archive is done. You can review while the run continues."
+            else:
+                text = "Nothing left to review here." if self._outcome != Outcome.tagged else "Nothing tagged yet."
+            self.emptyLabel.setText(text)
             self.detailStack.setCurrentWidget(self.emptyLabel)
             self.archiveCover.clear()
             self.candidateCover.clear()
