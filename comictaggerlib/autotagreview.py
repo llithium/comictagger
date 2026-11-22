@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import pathlib
 from collections.abc import Callable, Iterable
 from enum import auto
 
@@ -190,7 +191,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
     openRequested = QtCore.pyqtSignal(object)  # ComicArchive
     matchesWritten = QtCore.pyqtSignal(list)  # list[ComicArchive]
 
-    def __init__(self, parent: QtWidgets.QWidget | None, cache_dir: object) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None, cache_dir: pathlib.Path | None) -> None:
         super().__init__(parent)
         self.setObjectName("autoTagReview")
         self.items: list[ReviewItem] = []
