@@ -54,13 +54,13 @@ def test_workspace_follows_palette_changes(workspace):
     palette = workspace.palette()
     palette.setColor(role, QtGui.QColor("black"))
     workspace.setPalette(palette)
-    assert "#1e2326" in workspace.centralWidget.styleSheet()
-    assert "#1e2326" in workspace.toolBar.styleSheet()
+    assert "#16181e" in workspace.centralWidget.styleSheet()
+    assert "#16181e" in workspace.toolBar.styleSheet()
 
     palette.setColor(role, QtGui.QColor("white"))
     workspace.setPalette(palette)
-    assert "#f2f4f3" in workspace.centralWidget.styleSheet()
-    assert "#f2f4f3" in workspace.toolBar.styleSheet()
+    assert "#f1f2f5" in workspace.centralWidget.styleSheet()
+    assert "#f1f2f5" in workspace.toolBar.styleSheet()
 
 
 @pytest.mark.parametrize("draft_field", ["title", "rating"])
@@ -142,15 +142,15 @@ def test_workspace_opens_edits_and_clears_archive(workspace, tmp_comic, qtbot, m
     label.setText("Tags: Comic Rack, ComicBookLover, CoMet, Comic Archive Info, Comic Metadata")
     qtbot.waitUntil(lambda: label.height() >= 2 * label.fontMetrics().lineSpacing())
 
-    window.splitter.setSizes([400, 180])
-    list_height = window.splitter.sizes()[1]
-    assert list_height != config[0].internal__archive_list_height
+    window.splitter.setSizes([260, 700])
+    list_width = window.splitter.sizes()[0]
+    assert list_width != config[0].internal__file_list_width
     window.fileSelectionList.remove_archive_list([window.comic_archive])
     assert window.welcome.isVisible()
     assert not window.splitter.isVisible()
     assert window.close()
     saved = json.loads(config[0].Runtime_Options__config.settings_file.read_text(encoding="utf-8"))
-    assert saved["internal"]["archive_list_height"] == list_height
+    assert saved["internal"]["file_list_width"] == list_width
 
 
 @pytest.mark.parametrize("window_color", ["white", "black"])
@@ -171,13 +171,14 @@ def test_workspace_field_and_selection_contrast(workspace, window_color):
     workspace.setPalette(palette)
     workspace.show_editor()
     table = workspace.fileSelectionList.twList
+    workspace.fileSelectionList.btnTable.setChecked(True)
     workspace.resize(1200, 900)
     table.setRowCount(3)
     for row in range(3):
         table.setItem(row, 0, QtWidgets.QTableWidgetItem(f"Archive {row}"))
     table.setRangeSelected(QtWidgets.QTableWidgetSelectionRange(0, 0, 1, 0), True)
     table.setFocus()
-    workspace.splitter.setSizes([400, 200])
+    table.setColumnWidth(0, 200)
     QtWidgets.QApplication.processEvents()
 
     for field in (workspace.leTitle, workspace.cbFormat):
@@ -287,7 +288,7 @@ def test_workspace_restores_dividers_after_welcome(plugin_config, qtbot, monkeyp
     config, talkers = plugin_config
     config[0].internal__window_height = 960
     config[0].internal__window_width = 1200
-    config[0].internal__archive_list_height = 245
+    config[0].internal__file_list_width = 245
     config[0].internal__cover_sidebar_width = 222
     config[0].Dialog_Flags__show_disclaimer = False
     config[0].Dialog_Flags__notify_plugin_changes = False
@@ -298,7 +299,7 @@ def test_workspace_restores_dividers_after_welcome(plugin_config, qtbot, monkeyp
     window._post_show([])
     window.show_editor()
     QtWidgets.QApplication.processEvents()
-    assert abs(window.splitter.sizes()[1] - 245) <= 1
+    assert abs(window.splitter.sizes()[0] - 245) <= 1
     assert window.editorSplitter.sizes()[0] == 222
 
 
@@ -395,7 +396,8 @@ def test_save_button_changes_appearance_when_an_archive_opens(workspace, tmp_com
     palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(window_color))
     workspace.setPalette(palette)
     workspace.show_editor()
-    button = workspace.toolBar.widgetForAction(workspace.actionWrite_Tags)
+    button = workspace.saveBar.btnSave
+    assert workspace.toolBar.widgetForAction(workspace.actionWrite_Tags) is None
 
     def fill_color():
         image = button.grab().toImage()
@@ -494,7 +496,7 @@ def test_cover_divider_stops_when_the_page_fills_the_available_height(workspace,
     assert divider.sizes()[0] == wide
     assert workspace.config[0].internal__cover_sidebar_width == wide
 
-    workspace.splitter.setSizes([610, 210])
+    workspace.resize(workspace.width(), 760)
     qtbot.waitUntil(lambda: divider.sizes()[0] < wide)
     drag(600)
     assert_cover_fills_frame()
@@ -513,7 +515,7 @@ def test_archive_pane_keeps_a_complete_row_in_a_compact_window(workspace, tmp_co
     qtbot.waitUntil(lambda: workspace.comic_archive is not None)
     table = workspace.fileSelectionList.twList
     workspace.resize(workspace.size().width(), 500)
-    workspace.splitter.setSizes([workspace.splitter.height(), 0])
+    workspace.splitter.setSizes([0, workspace.splitter.width()])
     QtWidgets.QApplication.processEvents()
 
     assert table.viewport().rect().contains(table.visualItemRect(table.item(0, 0)).topLeft())

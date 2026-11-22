@@ -185,6 +185,7 @@ def test_loading_paths_adds_archives_after_background_probe(tmp_path, config, qt
 def test_archive_column_keeps_manual_width_when_loading_archives(tmp_comic, tmp_path, config, qtbot):
     file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
     qtbot.addWidget(file_list)
+    file_list.set_card_view(False)
     file_list.show()
     file_list.add_path_list([str(tmp_comic.path)])
     qtbot.waitUntil(lambda: not file_list.path_load_threads)
@@ -206,6 +207,7 @@ def test_archive_column_keeps_manual_width_when_loading_archives(tmp_comic, tmp_
 def test_tags_column_fits_all_detected_formats(tmp_comic, config, qtbot) -> None:
     file_list = FileSelectionList(None, config[0], lambda _title, _description: True)
     qtbot.addWidget(file_list)
+    file_list.set_card_view(False)
     file_list.show()
     formats = ("cr", "cbl", "comet")
     file_list._finish_path_load([PreparedPathItem(tmp_comic, "ZIP", formats, True)])

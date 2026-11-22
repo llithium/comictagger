@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 class AutoTagThread(QtCore.QThread):  # TODO: re-check thread semantics. Specifically with signals
     autoTagComplete = QtCore.pyqtSignal(OnlineMatchResults, list)
+    autoTagResult = QtCore.pyqtSignal(object)  # Result, emitted as soon as each archive is done
     autoTagLogMsg = QtCore.pyqtSignal(str)
     autoTagProgress = QtCore.pyqtSignal(object, object, object, bytes, bytes)  # see progress_callback
     ratelimit = QtCore.pyqtSignal(float, float)
@@ -49,6 +50,8 @@ class AutoTagThread(QtCore.QThread):  # TODO: re-check thread semantics. Specifi
         self.ca_list = ca_list
         self.config = config
         self.talker = talker
+        # Archives the user saved by hand while the run was going; the run leaves them alone.
+        self.skip_paths: set[pathlib.Path] = set()
 
     def log_output(self, text: str) -> None:
         self.check_canceled()
@@ -72,9 +75,13 @@ class AutoTagThread(QtCore.QThread):  # TODO: re-check thread semantics. Specifi
                 self.log_output("==========================================================================\n")
                 self.log_output(f"Auto-Tagging {prog_idx} of {len(self.ca_list)}\n")
                 self.log_output(f"{ca.path}\n")
+                if ca.path in self.skip_paths:
+                    self.log_output("Skipped: saved by hand during this run\n")
+                    continue
                 if ca.is_writable():
                     result = self.identify_and_tag_single_archive(ca, prog_idx)
                     match_results.record(result)
+                    self.autoTagResult.emit(result)
                     if result.status == Status.success and self.config.internal__remove_archive_after_successful_match:
                         archives_to_remove.append(ca)
         except IssueIdentifierCancelled:

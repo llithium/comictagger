@@ -40,18 +40,19 @@ from comicapi import utils
 from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.filenameparser import FileNameParser
-from comicapi.genericmetadata import Credit, FileHash, GenericMetadata
+from comicapi.genericmetadata import ComicSeries, Credit, FileHash, GenericMetadata
 from comicapi.issuestring import IssueString
 from comictaggerlib import ctsettings, ctversion
 from comictaggerlib.applicationlogwindow import ApplicationLogWindow, QTextEditLogger
-from comictaggerlib.autotagmatchwindow import AutoTagMatchWindow
 from comictaggerlib.autotagprogresswindow import AutoTagProgressWindow, AutoTagThread
+from comictaggerlib.autotagreview import AutoTagReviewPanel
 from comictaggerlib.autotagstartwindow import AutoTagSettings, AutoTagStartWindow
 from comictaggerlib.cbltransformer import CBLTransformer
 from comictaggerlib.coverimagewidget import CoverImageWidget
 from comictaggerlib.crediteditorwindow import CreditEditorWindow
 from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.draftreview import DraftReview
+from comictaggerlib.editorchrome import EditorHeader, FormCards, SaveBar
 from comictaggerlib.exportwindow import ExportConfig, ExportConflictOpts, ExportWindow
 from comictaggerlib.fileselectionlist import FileSelectionList
 from comictaggerlib.graphics import graphics_path
@@ -62,7 +63,8 @@ from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.pagebrowser import PageBrowserWindow
 from comictaggerlib.pagelisteditor import PageListEditor
 from comictaggerlib.renamewindow import RenameWindow
-from comictaggerlib.resulttypes import OnlineMatchResults
+from comictaggerlib.resulttypes import OnlineMatchResults, Result
+from comictaggerlib.searchpanel import SearchPanel
 from comictaggerlib.seriesselectionwindow import SeriesSelectionWindow
 from comictaggerlib.settingswindow import SettingsWindow
 from comictaggerlib.ui import qtutils, ui_path
@@ -192,7 +194,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.page_list_editor = PageListEditor(self.tabPages)
         grid_layout = QtWidgets.QGridLayout(self.tabPages)
-        grid_layout.addWidget(self.page_list_editor)
+        # Scroll the page editor when the form is narrow, so it doesn't set the whole window's minimum width.
+        pages_scroll = QtWidgets.QScrollArea(self.tabPages)
+        pages_scroll.setObjectName("pagesScroll")
+        pages_scroll.setWidgetResizable(True)
+        pages_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        pages_scroll.setWidget(self.page_list_editor)
+        grid_layout.addWidget(pages_scroll)
 
         self.fileSelectionList = FileSelectionList(
             self.widgetListHolder, self.config[0], self.dirty_flag_verification, self.review_blank_draft
@@ -201,6 +209,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         grid_layout.addWidget(self.fileSelectionList)
 
         self.fileSelectionList.selectionChanged.connect(self.load_archive)
+        self.setup_auto_tag_review()
+        self.setup_search_panel()
         self.fileSelectionList.listCleared.connect(self.file_list_cleared)
         self.fileSelectionList.set_sorting(
             self.config[0].internal__sort_column, QtCore.Qt.SortOrder(self.config[0].internal__sort_direction)
@@ -348,8 +358,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
             OptionalMessageDialog.warning(self, "Failed to load comics", "", trace_back)
 
         self.set_app_position()
-        list_height = self.config[0].internal__archive_list_height
-        self.splitter.setSizes([max(1, self.splitter.height() - list_height), list_height])
+        list_width = self.config[0].internal__file_list_width
+        self.splitter.setSizes([list_width, max(1, self.splitter.width() - list_width)])
         self.raise_()
         QtCore.QCoreApplication.processEvents()
 
@@ -409,9 +419,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         for combo in (self.cbLanguage, self.cbCountry, self.cbx_sources):
             combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.currentTextChanged.connect(combo.setToolTip)
+        # The file list sits on the left of the cover and form, the full height of the window.
+        self.splitter.setOrientation(QtCore.Qt.Orientation.Horizontal)
+        self.splitter.insertWidget(0, self.widgetListHolder)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.widgetListHolder.setMinimumWidth(220)
         self.widgetListHolder.layout().setContentsMargins(0, 0, 0, 0)
         self.fileSelectionList.layout().setContentsMargins(0, 0, 0, 0)
         self.tabWidget.tabBar().setDrawBase(False)
@@ -426,7 +440,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             button.setAccessibleName(name)
             button.setToolTip(name)
         self.toolBar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.toolBar.widgetForAction(self.actionWrite_Tags).setObjectName("saveTags")
+        # Save tags lives in the save bar under the form (and the File menu), not the toolbar.
+        self.toolBar.removeAction(self.actionWrite_Tags)
+        self.setup_editor_chrome()
         self.toolBar.insertSeparator(self.actionSearchOnline)
         self.toolBar.insertSeparator(self.actionPageBrowser)
         for action in self.toolBar.actions():
@@ -462,6 +478,103 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.gridLayout.addWidget(self.welcome, 0, 0)
         self.apply_workspace_style()
 
+    def setup_editor_chrome(self) -> None:
+        """Put a header above the form tabs and a save bar below them, and split Details into cards."""
+        self.editorPane = QtWidgets.QWidget()
+        self.editorPane.setObjectName("editorPane")
+        index = self.editorSplitter.indexOf(self.tabWidget)
+        self.editorSplitter.replaceWidget(index, self.editorPane)
+        pane = QtWidgets.QVBoxLayout(self.editorPane)
+        pane.setContentsMargins(0, 0, 0, 0)
+        pane.setSpacing(0)
+        self.editorHeader = EditorHeader()
+        self.saveBar = SaveBar(self.actionWrite_Tags)
+        self.saveBar.btnRevert.clicked.connect(self.revert_form)
+        pane.addWidget(self.editorHeader)
+        pane.addWidget(self.tabWidget, 1)
+        pane.addWidget(self.saveBar)
+        self.editorSplitter.setStretchFactor(index, 1)
+
+        self.formCards = FormCards(
+            self.gridLayout_6,
+            [self.issueHeading, self.publicationHeading, self.classificationHeading, self.alternateHeading],
+            {field: label for field, (label, _text) in self.field_labels.items()},
+            self.scrollArea,
+        )
+        self.formCards.changed.connect(self._update_form_summary)
+
+        self.formSummary = QtWidgets.QLabel()
+        self.formSummary.setObjectName("formSummary")
+        # A tool button, not a checkbox, so clearing the form never resets it.
+        self.btnHideEmpty = QtWidgets.QToolButton()
+        self.btnHideEmpty.setObjectName("hideEmpty")
+        self.btnHideEmpty.setText("Hide empty fields")
+        self.btnHideEmpty.setCheckable(True)
+        self.btnHideEmpty.setToolTip("Show only the fields that have a value")
+        self.btnHideEmpty.toggled.connect(self.formCards.set_hide_empty)
+        self.editorHeader.add_tools([self.formSummary, self.btnHideEmpty])
+
+        def details_tools() -> None:
+            on_details = self.tabWidget.currentWidget() is self.tab
+            self.formSummary.setVisible(on_details)
+            self.btnHideEmpty.setVisible(on_details)
+
+        self.tabWidget.currentChanged.connect(lambda _index: details_tools())
+        for field in (
+            self.leSeries,
+            self.leIssueNum,
+            self.leIssueCount,
+            self.leVolumeNum,
+            self.lePubYear,
+            self.leTitle,
+        ):
+            field.textChanged.connect(self.update_editor_header)
+
+    def update_editor_header(self) -> None:
+        if not hasattr(self, "editorHeader"):
+            return
+        ca = self.comic_archive
+        series = self.leSeries.text().strip()
+        issue = self.leIssueNum.text().strip()
+        count = self.leIssueCount.text().strip()
+        if series:
+            title = f"{series} #{issue}" if issue else series
+            if issue and count:
+                title += f" of {count}"
+        elif ca is not None:
+            title = os.path.splitext(ca.path.name)[0]
+        else:
+            title = "New tags"
+        details = [self.leTitle.text().strip()]
+        if self.leVolumeNum.text().strip():
+            details.append(f"Volume {self.leVolumeNum.text().strip()}")
+        details.append(self.lePubYear.text().strip())
+        tag_names = ", ".join(
+            tags[tag].name() for tag in self.config[0].Runtime_Options__tags_write if tag in tags and tags[tag].enabled
+        )
+        read_only = ca is not None and not ca.is_writable()
+        self.editorHeader.show_comic(title, " · ".join(d for d in details if d), read_only, tag_names)
+        if read_only:
+            hint = "This file is read-only, so tags can't be saved to it."
+        elif self.dirty_flag:
+            hint = f"Saving writes {tag_names} tags." if tag_names else ""
+        else:
+            hint = "All changes saved." if ca is not None else ""
+        self.saveBar.set_state(self.dirty_flag, hint)
+
+    def _update_form_summary(self) -> None:
+        filled, total = self.formCards.totals()
+        self.formSummary.setText(f"{filled} of {total} fields filled")
+
+    def revert_form(self) -> None:
+        """Throw away the form's edits and reload the current archive's tags."""
+        archive = self.comic_archive
+        if archive is None or not self.dirty_flag:
+            return
+        self.clear_dirty_flag()
+        self.fileSelectionList.dirty_flag = False
+        self.load_archive(archive)
+
     def remember_cover_sidebar_width(self) -> None:
         self.config[0].internal__cover_sidebar_width = self.editorSplitter.sizes()[0]
 
@@ -473,6 +586,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def show_editor(self) -> None:
         entering_editor = not self.welcome.isHidden()
+        if hasattr(self, "autoTagReview") and self.in_review():
+            self.autoTagReview.hide()
+            self.actionEditorView.setChecked(True)
         self.toolBar.show()
         self.welcome.hide()
         self.splitter.show()
@@ -491,27 +607,48 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def apply_workspace_style(self) -> None:
         dark = self.palette().window().color().lightness() < 128
+        # Cool neutrals with a blue accent; status colours mark what needs attention in the review.
         colors = {
-            "canvas": "#1e2326" if dark else "#f2f4f3",
-            "surface": "#282e30" if dark else "#ffffff",
-            "ink": "#f0f4f1" if dark else "#1d302d",
-            "muted": "#bdcbc6" if dark else "#4b615b",
-            "edge": "#58645f" if dark else "#c9d3cf",
-            "accent": "#a6dfcb" if dark else "#175b49",
-            "onAccent": "#112b22" if dark else "#ffffff",
-            "fieldBorder": "#899a92" if dark else "#7a8b83",
-            "wash": "#343e3b" if dark else "#e9efec",
+            "canvas": "#16181e" if dark else "#f1f2f5",
+            "surface": "#1f222b" if dark else "#ffffff",
+            "ink": "#e3e6ed" if dark else "#1f2330",
+            "muted": "#a3aaba" if dark else "#5d6473",
+            "edge": "#363b47" if dark else "#d9dce3",
+            "accent": "#7d9cf5" if dark else "#2f5bd3",
+            "onAccent": "#0e1426" if dark else "#ffffff",
+            "fieldBorder": "#6b7282" if dark else "#8a91a0",
+            "wash": "#2a2e38" if dark else "#e7e9ee",
+            "selection": "#2d3c63" if dark else "#dbe5fb",
+            "ok": "#4cc483" if dark else "#1f8a4c",
+            "okSoft": "#173a28" if dark else "#e2f4ea",
+            "warn": "#f0a93b" if dark else "#9a5c00",
+            "warnSoft": "#3d2e12" if dark else "#fdf0d9",
+            "bad": "#f07272" if dark else "#c23b3b",
+            "badSoft": "#3f1c1c" if dark else "#fbe5e5",
+            "accSoft": "#25305a" if dark else "#e3eafc",
         }
         with (ui_path / "workspace.qss").open(encoding="utf-8") as sheet:
             style = sheet.read()
         font_size = self.fontInfo().pixelSize()
-        for name, scale in (("bodyText", 1.0), ("smallText", 0.92), ("headingText", 1.23), ("welcomeText", 2.15)):
+        for name, scale in (
+            ("bodyText", 1.0),
+            ("smallText", 0.92),
+            ("headingText", 1.23),
+            ("titleText", 1.6),
+            ("welcomeText", 2.15),
+        ):
             style = style.replace("@" + name, f"{round(font_size * scale)}px")
         style = style.replace("@chevron", str(graphics_path / "dropdown.svg").replace(os.sep, "/"))
-        for role, color in colors.items():
-            style = style.replace("@" + role, color)
+        # Longest names first, so "@okSoft" isn't half-replaced by "@ok".
+        for role in sorted(colors, key=len, reverse=True):
+            style = style.replace("@" + role, colors[role])
         self.centralWidget.setStyleSheet(style)
         self.toolBar.setStyleSheet(style)
+        if hasattr(self, "searchDock"):
+            self.searchDock.setStyleSheet(style)
+        if hasattr(self, "autoTagReview"):
+            self.autoTagReview.set_colors(colors)
+        self.fileSelectionList.set_colors(colors)
         self.fileSelectionList.update_minimum_height()
 
     def enabled_tags(self) -> Sequence[str]:
@@ -560,7 +697,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
     def reset_app(self) -> None:
         if self.splitter.isVisible():
-            self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
+            self.config[0].internal__file_list_width = self.splitter.sizes()[0]
         self.archiveCoverWidget.clear()
         self.comic_archive = None
         self.dirty_flag = False
@@ -573,6 +710,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_info_box()
 
         self.splitter.hide()
+        if hasattr(self, "autoTagReview") and not self.autoTagReview.running:
+            # The list was cleared, so the review's archives are gone too.
+            self.autoTagReview.items = []
+            self.autoTagReview.hide()
+            self.autoTagReview._refresh()
         self.welcome.show()
         self.toolBar.hide()
         self.droppedFile = None
@@ -906,6 +1048,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         tag_list = ", ".join(tags[tag].name() for tag in ca.get_supported_tags() if ca.has_tags(tag))
         self.lblTagList.setText(f"Tags: {tag_list}" if tag_list else "")
+        self.update_editor_header()
+        self.formCards.apply_visibility()
 
     def set_dirty_flag(self) -> None:
         if not self.dirty_flag:
@@ -914,6 +1058,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if self.comic_archive is None:
                 self.update_menus()
             self.update_app_title()
+            self.update_editor_header()
 
     def clear_dirty_flag(self) -> None:
         if self.dirty_flag:
@@ -922,6 +1067,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if self.comic_archive is None:
                 self.update_menus()
             self.update_app_title()
+            self.update_editor_header()
 
     def connect_dirty_flag_signals(self) -> None:
         # recursively connect the tab form child slots
@@ -1257,13 +1403,17 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
             return
 
+        year = utils.xlate_int(self.lePubYear.text())
+        if not autoselect:
+            # Plain and literal searches use the docked search panel; Auto-Identify keeps its window.
+            self.show_search_panel(str(self.leSeries.text()).strip(), issue_number, year, literal)
+            return
+
         if str(self.leSeries.text()).strip() != "":
             series_name = str(self.leSeries.text()).strip()
         else:
             OptionalMessageDialog.information(self, "Online Search", "Need to enter a series name to search.")
             return
-
-        year = utils.xlate_int(self.lePubYear.text())
 
         issue_count = utils.xlate_int(self.leIssueCount.text())
 
@@ -1289,10 +1439,48 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def finish_query(self, selector: SeriesSelectionWindow) -> None:
         if self.selector is not selector:
             return
+        self._start_issue_lookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
 
-        self._issue_lookup = IssueLookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
+    def _start_issue_lookup(self, talker: ComicTalker, issue_id: str, series_id: str, issue_number: str) -> None:
+        self._issue_lookup = IssueLookup(talker, issue_id, series_id, issue_number)
         self._issue_lookup.start()
         self._lookup_timer.start()
+
+    def setup_search_panel(self) -> None:
+        self.searchPanel = SearchPanel(None, self.config[0].Runtime_Options__config.user_cache_dir, cancel_text="Close")
+        self.searchDock = QtWidgets.QDockWidget("Search Online", self)
+        self.searchDock.setObjectName("searchDock")
+        self.searchDock.setWidget(self.searchPanel)
+        self.searchDock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.searchDock)
+        self.searchDock.hide()
+        self._search_target: ComicArchive | None = None
+        self.searchPanel.issueChosen.connect(self.search_panel_chose)
+        self.searchPanel.canceled.connect(self.searchDock.hide)
+        self.searchPanel.ratelimit.connect(self.on_ratelimit)
+
+    def show_search_panel(self, series_name: str, issue_number: str, year: int | None, literal: bool = False) -> None:
+        self._forget_issue_lookup()
+        self.selector = None
+        self._search_target = self.comic_archive
+        self.searchDock.show()
+        self.searchDock.raise_()
+        self.resizeDocks([self.searchDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
+        self.searchPanel.start(series_name, issue_number, year, self.config[0], self.current_talker(), literal)
+        if series_name:
+            self.searchPanel.seriesTable.setFocus()
+
+    def search_panel_chose(self, issue: GenericMetadata, series: ComicSeries) -> None:
+        if self.comic_archive is not self._search_target:
+            name = self._search_target.path.name if self._search_target is not None else "the blank draft"
+            self.statusBar().showMessage(f"That search was for {name}. Search again for the archive open now.", 8000)
+            return
+        if not issue.issue_id:
+            return
+        self.searchDock.hide()
+        self._start_issue_lookup(
+            self.searchPanel.talker or self.current_talker(), issue.issue_id, series.id, issue.issue or ""
+        )
 
     def _forget_issue_lookup(self) -> None:
         self._lookup_timer.stop()
@@ -1467,6 +1655,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.metadata = reloaded_metadata
         self.fileSelectionList.update_row(row)
         self.update_ui_for_archive()
+        self.autoTagReview.mark_fixed(self.comic_archive)
+        if self.auto_tag_running():
+            self.autotagthread.skip_paths.add(self.comic_archive.path)
         return True
 
     def select_read_tags(self, tag_ids: list[str]) -> None:
@@ -1533,6 +1724,8 @@ class TaggerWindow(QtWidgets.QMainWindow):
         self.update_credit_colors()
         self.page_list_editor.select_write_tags(self.config[0].Runtime_Options__tags_write)
         self.toggle_enable_embedding_hashes()
+        if hasattr(self, "formCards"):
+            self.formCards.apply_visibility()
 
     def add_credit(self) -> None:
         row = self.twCredits.rowCount()
@@ -2055,6 +2248,9 @@ class TaggerWindow(QtWidgets.QMainWindow):
             QtCore.QCoreApplication.processEvents()
 
     def auto_tag(self) -> None:
+        if self.auto_tag_running():
+            self.show_review()
+            return
         ca_list = self.fileSelectionList.get_selected_archive_list()
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
 
@@ -2085,28 +2281,67 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         ca_list = self.fileSelectionList.get_selected_archive_list()
         self.fileSelectionList.clear_auto_tag_results(ca_list)
+        if self.atprogdialog is not None:
+            self.atprogdialog.close()
+        # The progress window is now an optional details view; the run itself is shown in the review panel.
         self.atprogdialog = AutoTagProgressWindow(self, self.current_talker())
+        self.atprogdialog.setModal(False)
         self.atprogdialog.progressBar.setMaximum(len(ca_list))
         self.atprogdialog.setWindowTitle("Auto-Tagging")
+        hide_button = self.atprogdialog.buttonBox.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        if hide_button is not None:
+            hide_button.setText("Hide")
+        # Closing the details window only hides it; Stop in the review panel cancels the run.
+        self.atprogdialog.cancel.connect(self.atprogdialog.hide)
 
-        center_window_on_parent(self.atprogdialog)
         temp_config = auto_tag.new_settings(self.config[0])
         self.autotagthread = AutoTagThread(auto_tag.search_string, ca_list, temp_config, self.current_talker())
 
         self.autotagthread.autoTagComplete.connect(
             functools.partial(self.auto_tag_finished, config=temp_config, archives=ca_list)
         )
+        self.autotagthread.autoTagResult.connect(self.auto_tag_result)
         self.autotagthread.autoTagLogMsg.connect(self.auto_tag_log)
         self.autotagthread.autoTagProgress.connect(self.atprogdialog.on_progress)
+        self.autotagthread.autoTagProgress.connect(self._auto_tag_progress)
         self.autotagthread.ratelimit.connect(self.ratelimit)
 
-        # We don't use rejected as that closes the dialog
-        self.atprogdialog.cancel.connect(self.autotagthread.cancel)
+        self.autoTagReview.begin_run(ca_list, temp_config, self.current_talker())
+        self.show_review()
+        self.actionAutoTag.setEnabled(False)
 
         self.auto_tag_log("==========================================================================\n")
         self.auto_tag_log(f"Auto-Tagging Started for {len(ca_list)} items\n")
         self.autotagthread.start()
-        self.atprogdialog.open()
+
+    def _auto_tag_progress(self, cur: int | None, total: int | None, path: object, *_images: bytes) -> None:
+        if cur is not None and total is not None:
+            self.autoTagReview.set_progress(cur, total, path)
+
+    def auto_tag_running(self) -> bool:
+        thread = getattr(self, "autotagthread", None)
+        return thread is not None and thread.isRunning()
+
+    def auto_tag_result(self, result: Result) -> None:
+        """Show one archive's outcome while the rest of the run continues."""
+        self.autoTagReview.add_result(result)
+        single = OnlineMatchResults()
+        single.record(result)
+        self.fileSelectionList.show_auto_tag_results(single)
+        row, archive = self.fileSelectionList.get_current_list_row(str(result.original_path))
+        if row >= 0:
+            self.fileSelectionList.update_row(row)
+            if archive is self.comic_archive and not self.dirty_flag:
+                self.load_archive(archive)
+
+    def show_auto_tag_log(self) -> None:
+        if self.atprogdialog is not None:
+            self.atprogdialog.show()
+            self.atprogdialog.raise_()
+
+    def stop_auto_tag(self) -> None:
+        if self.auto_tag_running():
+            self.autotagthread.cancel()
 
     def auto_tag_finished(
         self,
@@ -2117,15 +2352,13 @@ class TaggerWindow(QtWidgets.QMainWindow):
         archives: list[ComicArchive],
     ) -> None:
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
-        if self.atprogdialog:
-            self.atprogdialog.accept()
+        self.actionAutoTag.setEnabled(True)
 
         self.fileSelectionList.remove_archive_list(archives_to_remove)
         if match_results.good_matches:
             self.config[0].Dialog_Flags__show_disclaimer = False
         self.fileSelectionList.show_auto_tag_results(match_results)
-        self._reload_page()
-        self.atprogdialog = None
+        self._reload_page_if_clean()
 
         summary = f"<p>{self.current_talker().attribution}</p>"
         summary += f"Successfully added {tag_names} tags to {len(match_results.good_matches)} archive(s)<br/>"
@@ -2146,51 +2379,112 @@ class TaggerWindow(QtWidgets.QMainWindow):
             summary += f"Archives that failed due to tag reading errors: {len(match_results.read_failures)}<br/>"
 
         self.auto_tag_log(summary)
-
-        selectable = match_results.multiple_matches or match_results.low_confidence_matches
-
-        title = "Auto-Tag Summary"
-        if not selectable:
-            logger.info(summary)
-            OptionalMessageDialog.msg_no_checkbox(
-                self,
-                title,
-                summary,
-                icon=OptionalMessageDialog.Icon.Information,
-            )
-            return
-
-        summary += (
-            "\n\nDo you want to manually select the ones with multiple matches and/or low-confidence matches now?"
-        )
         logger.info(summary)
-        OptionalMessageDialog.question(
-            self,
-            title,
-            summary,
-            check_text=None,
-        ).accepted.connect(
-            functools.partial(self.open_auto_tag_match_window, match_results, config=config, archives=archives)
-        )
+        if self.autoTagReview.running:
+            self.autoTagReview.finish_run()
+            self.statusBar().showMessage(self.autoTagReview.summary())
+        else:
+            self.show_auto_tag_review(match_results, config=config, archives=archives)
 
-    def open_auto_tag_match_window(
+    def setup_auto_tag_review(self) -> None:
+        self.autoTagReview = AutoTagReviewPanel(None, self.config[0].Runtime_Options__config.user_cache_dir)
+        # The review takes over the window, like an inbox; the toolbar switches between it and the editor.
+        self.gridLayout.addWidget(self.autoTagReview, 0, 0)
+        self.autoTagReview.hide()
+
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.toolBar.addWidget(spacer)
+        self.viewGroup = QtGui.QActionGroup(self)
+        self.viewGroup.setExclusive(True)
+        self.actionEditorView = QtGui.QAction("Editor", self)
+        self.actionReviewView = QtGui.QAction("Review", self)
+        for action, slot in ((self.actionEditorView, self.show_editor_view), (self.actionReviewView, self.show_review)):
+            action.setCheckable(True)
+            action.triggered.connect(slot)
+            self.viewGroup.addAction(action)
+            self.toolBar.addAction(action)
+            button = self.toolBar.widgetForAction(action)
+            if button is not None:
+                button.setObjectName("viewSwitch")
+        self.actionEditorView.setChecked(True)
+        self.actionReviewView.setToolTip("Review the results of the last Auto-Tag run")
+        self.actionReviewView.setVisible(False)
+        self.actionEditorView.setVisible(False)
+
+        review_action = QtGui.QAction("Auto-Tag Review", self)
+        review_action.triggered.connect(self.show_review)
+        self.menuWindow.addAction(review_action)
+        self.autoTagReview.openRequested.connect(self.review_open_archive)
+        self.autoTagReview.matchesWritten.connect(self.review_matches_written)
+        self.autoTagReview.stopRequested.connect(self.stop_auto_tag)
+        self.autoTagReview.logRequested.connect(self.show_auto_tag_log)
+        self.autoTagReview.ratelimit.connect(self.on_ratelimit)
+        self.autoTagReview.countsChanged.connect(self._update_review_switch)
+
+    def _update_review_switch(self) -> None:
+        has_review = bool(self.autoTagReview.items) or self.autoTagReview.running
+        self.actionReviewView.setVisible(has_review)
+        self.actionEditorView.setVisible(has_review)
+        pending = self.autoTagReview.pending_count()
+        self.actionReviewView.setText(f"Review · {pending}" if pending else "Review")
+
+    def in_review(self) -> bool:
+        return not self.autoTagReview.isHidden()
+
+    def show_review(self) -> None:
+        self.welcome.hide()
+        self.splitter.hide()
+        self.toolBar.show()
+        self.autoTagReview.show()
+        self.actionReviewView.setChecked(True)
+        self._update_review_switch()
+        self.autoTagReview.fileList.setFocus()
+
+    def show_editor_view(self) -> None:
+        self.autoTagReview.hide()
+        self.actionEditorView.setChecked(True)
+        if self.fileSelectionList.twList.rowCount() or self.comic_archive is not None:
+            self.show_editor()
+        else:
+            self.welcome.show()
+
+    def show_auto_tag_review(
         self, match_results: OnlineMatchResults, *, config: ct_ns, archives: list[ComicArchive]
     ) -> None:
-        candidates = [*match_results.multiple_matches, *match_results.low_confidence_matches]
-        auto_tagged_archives = {a.path: a for a in archives}
-        matchdlg = AutoTagMatchWindow(
-            self,
-            [(m, auto_tagged_archives[m.original_path]) for m in candidates],
-            config,
-            self.current_talker(),
-        )
+        self.autoTagReview.load_results(match_results, archives, config, self.current_talker())
+        self.show_review()
+        self.statusBar().showMessage(self.autoTagReview.summary())
 
-        matchdlg.open()
-        matchdlg.finished.connect(self._reload_page)
-        if config.internal__remove_archive_after_successful_match:
-            matchdlg.matched_files.connect(self.fileSelectionList.remove_archive_list)
+    def _select_archive_in_list(self, archive: ComicArchive) -> bool:
+        row, _ = self.fileSelectionList.get_current_list_row(str(archive.path))
+        if row < 0:
+            self.statusBar().showMessage(f"{archive.path.name} is no longer in the file list", 5000)
+            return False
+        if self.fileSelectionList.get_current_archive() is not archive:
+            self.fileSelectionList.twList.selectRow(row)
+        return self.comic_archive is archive
+
+    def review_open_archive(self, archive: ComicArchive) -> None:
+        if self._select_archive_in_list(archive):
+            self.show_editor_view()
+            self.leSeries.setFocus()
+
+    def review_matches_written(self, archives: list[ComicArchive]) -> None:
+        config = self.autoTagReview.config
+        if config is not None and config.internal__remove_archive_after_successful_match:
+            self.fileSelectionList.remove_archive_list(archives)
+            self.autoTagReview.remove_archives(archives)
         else:
-            matchdlg.matched_files.connect(self.fileSelectionList.show_manual_matches)
+            self.fileSelectionList.show_manual_matches(archives)
+        self._reload_page_if_clean()
+
+    def _reload_page_if_clean(self) -> None:
+        """Refresh the list and editor without throwing away edits the user hasn't saved."""
+        if self.dirty_flag:
+            self.fileSelectionList.update_selected_rows()
+        else:
+            self._reload_page()
 
     def _reload_page(self) -> None:
         self.fileSelectionList.update_selected_rows()
@@ -2227,13 +2521,18 @@ class TaggerWindow(QtWidgets.QMainWindow):
         ):
             self._forget_issue_lookup()
             self.selector = None
+            if self.auto_tag_running():
+                self.autotagthread.cancel()
+                self.autotagthread.wait(10000)
+            self.autoTagReview.searchPanel.wait_for_idle()
+            self.searchPanel.wait_for_idle()
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()
             self.config[0].internal__window_height = appsize.height()
             self.config[0].internal__window_x = self.x()
             self.config[0].internal__window_y = self.y()
             if self.splitter.isVisible():
-                self.config[0].internal__archive_list_height = self.splitter.sizes()[1]
+                self.config[0].internal__file_list_width = self.splitter.sizes()[0]
             (
                 self.config[0].internal__sort_column,
                 self.config[0].internal__sort_direction,
