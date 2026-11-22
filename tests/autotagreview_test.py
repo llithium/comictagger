@@ -319,3 +319,51 @@ def test_workspace_run_does_not_block_and_skips_files_saved_by_hand(workspace, r
     thread.autoTagComplete.emit(results, [])
     assert workspace.actionAutoTag.isEnabled()
     assert not workspace.autoTagReview.running
+
+
+def test_search_results_sort_by_column_without_reloading(panel, qtbot):
+    panel.talker.name = "Test"
+    panel.talker.search_for_series.return_value = [
+        series_result("Lost", "s1", 2004),
+        series_result("Lost Girls", "s2", 1991),
+        series_result("Lost in Space", "s3", 2016),
+    ]
+    panel.talker.fetch_issues_in_series.return_value = [
+        GenericMetadata(issue=str(n), issue_id=f"i{n}") for n in (10, 9)
+    ]
+    panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
+    panel.search_current()
+    search = panel.searchPanel
+    qtbot.waitUntil(lambda: search.issueTable.rowCount() == 2)
+    years = lambda: [search.seriesTable.item(r, 1).text() for r in range(3)]  # noqa: E731
+
+    assert search.seriesTable.isSortingEnabled()  # header clicks sort
+    assert years() == ["2004", "1991", "2016"]  # best match first until a column is chosen
+    search.seriesTable.sortItems(1, QtCore.Qt.SortOrder.AscendingOrder)
+
+    assert years() == ["1991", "2004", "2016"]
+    assert search.current_series().id == "s1"
+    assert panel.talker.fetch_issues_in_series.call_count == 1
+    search.issueTable.sortItems(0, QtCore.Qt.SortOrder.DescendingOrder)
+    assert [search.issueTable.item(r, 0).text() for r in range(2)] == ["10", "9"]
+
+
+def test_editor_search_online_uses_the_docked_panel(workspace, tmp_comic, qtbot, monkeypatch):
+    talker = Mock(attribution="")
+    talker.name = "Test"
+    talker.search_for_series.return_value = [series_result("Cory Doctorow's Futuristic Tales", "s1", 2007)]
+    talker.fetch_issues_in_series.return_value = [GenericMetadata(issue="1", issue_id="i1")]
+    monkeypatch.setattr(workspace, "current_talker", lambda: talker)
+    lookups = []
+    monkeypatch.setattr(workspace, "_start_issue_lookup", lambda *args: lookups.append(args[1:]))
+    workspace.fileSelectionList.add_path_item(str(tmp_comic.path))
+    workspace.fileSelectionList.twList.selectRow(0)
+
+    workspace.actionSearchOnline.trigger()
+
+    assert workspace.searchDock.isVisible()
+    search = workspace.searchPanel
+    qtbot.waitUntil(lambda: search.issueTable.rowCount() == 1)
+    search.btnUse.click()
+    assert lookups == [("i1", "s1", "1")]
+    assert not workspace.searchDock.isVisible()

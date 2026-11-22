@@ -40,7 +40,7 @@ from comicapi import utils
 from comicapi.archivers.archiver import ArchiveExportCollision
 from comicapi.comicarchive import ComicArchive, tags
 from comicapi.filenameparser import FileNameParser
-from comicapi.genericmetadata import Credit, FileHash, GenericMetadata
+from comicapi.genericmetadata import ComicSeries, Credit, FileHash, GenericMetadata
 from comicapi.issuestring import IssueString
 from comictaggerlib import ctsettings, ctversion
 from comictaggerlib.applicationlogwindow import ApplicationLogWindow, QTextEditLogger
@@ -63,6 +63,7 @@ from comictaggerlib.pagebrowser import PageBrowserWindow
 from comictaggerlib.pagelisteditor import PageListEditor
 from comictaggerlib.renamewindow import RenameWindow
 from comictaggerlib.resulttypes import OnlineMatchResults, Result
+from comictaggerlib.searchpanel import SearchPanel
 from comictaggerlib.seriesselectionwindow import SeriesSelectionWindow
 from comictaggerlib.settingswindow import SettingsWindow
 from comictaggerlib.ui import qtutils, ui_path
@@ -202,6 +203,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
 
         self.fileSelectionList.selectionChanged.connect(self.load_archive)
         self.setup_auto_tag_review()
+        self.setup_search_panel()
         self.fileSelectionList.listCleared.connect(self.file_list_cleared)
         self.fileSelectionList.set_sorting(
             self.config[0].internal__sort_column, QtCore.Qt.SortOrder(self.config[0].internal__sort_direction)
@@ -1258,13 +1260,17 @@ class TaggerWindow(QtWidgets.QMainWindow):
             )
             return
 
+        year = utils.xlate_int(self.lePubYear.text())
+        if not autoselect:
+            # Plain and literal searches use the docked search panel; Auto-Identify keeps its window.
+            self.show_search_panel(str(self.leSeries.text()).strip(), issue_number, year, literal)
+            return
+
         if str(self.leSeries.text()).strip() != "":
             series_name = str(self.leSeries.text()).strip()
         else:
             OptionalMessageDialog.information(self, "Online Search", "Need to enter a series name to search.")
             return
-
-        year = utils.xlate_int(self.lePubYear.text())
 
         issue_count = utils.xlate_int(self.leIssueCount.text())
 
@@ -1290,10 +1296,49 @@ class TaggerWindow(QtWidgets.QMainWindow):
     def finish_query(self, selector: SeriesSelectionWindow) -> None:
         if self.selector is not selector:
             return
+        self._start_issue_lookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
 
-        self._issue_lookup = IssueLookup(selector.talker, selector.issue_id, selector.series_id, selector.issue_number)
+    def _start_issue_lookup(self, talker: ComicTalker, issue_id: str, series_id: str, issue_number: str) -> None:
+        self._issue_lookup = IssueLookup(talker, issue_id, series_id, issue_number)
         self._issue_lookup.start()
         self._lookup_timer.start()
+
+    def setup_search_panel(self) -> None:
+        self.searchPanel = SearchPanel(None, self.config[0].Runtime_Options__config.user_cache_dir, cancel_text="Close")
+        self.searchDock = QtWidgets.QDockWidget("Search Online", self)
+        self.searchDock.setObjectName("searchDock")
+        self.searchDock.setWidget(self.searchPanel)
+        self.searchDock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.searchDock)
+        self.tabifyDockWidget(self.autoTagReviewDock, self.searchDock)
+        self.searchDock.hide()
+        self._search_target: ComicArchive | None = None
+        self.searchPanel.issueChosen.connect(self.search_panel_chose)
+        self.searchPanel.canceled.connect(self.searchDock.hide)
+        self.searchPanel.ratelimit.connect(self.on_ratelimit)
+
+    def show_search_panel(self, series_name: str, issue_number: str, year: int | None, literal: bool = False) -> None:
+        self._forget_issue_lookup()
+        self.selector = None
+        self._search_target = self.comic_archive
+        self.searchDock.show()
+        self.searchDock.raise_()
+        self.resizeDocks([self.searchDock], [max(320, self.height() // 2)], QtCore.Qt.Orientation.Vertical)
+        self.searchPanel.start(series_name, issue_number, year, self.config[0], self.current_talker(), literal)
+        if series_name:
+            self.searchPanel.seriesTable.setFocus()
+
+    def search_panel_chose(self, issue: GenericMetadata, series: ComicSeries) -> None:
+        if self.comic_archive is not self._search_target:
+            name = self._search_target.path.name if self._search_target is not None else "the blank draft"
+            self.statusBar().showMessage(f"That search was for {name}. Search again for the archive open now.", 8000)
+            return
+        if not issue.issue_id:
+            return
+        self.searchDock.hide()
+        self._start_issue_lookup(
+            self.searchPanel.talker or self.current_talker(), issue.issue_id, series.id, issue.issue or ""
+        )
 
     def _forget_issue_lookup(self) -> None:
         self._lookup_timer.stop()
@@ -2295,6 +2340,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
                 self.autotagthread.cancel()
                 self.autotagthread.wait(10000)
             self.autoTagReview.searchPanel.wait_for_idle()
+            self.searchPanel.wait_for_idle()
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()
             self.config[0].internal__window_height = appsize.height()

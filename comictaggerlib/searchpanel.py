@@ -61,6 +61,29 @@ def best_issue_row(issues: list[GenericMetadata], issue_number: str) -> int:
     return 0
 
 
+_SORT_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+
+
+class _SortableItem(QtWidgets.QTableWidgetItem):
+    """A cell that sorts by a typed key, so years and issue numbers sort as numbers."""
+
+    def __init__(self, text: str, key: object) -> None:
+        super().__init__(text)
+        self.setToolTip(text)
+        self.setData(_SORT_ROLE, key)
+
+    def __lt__(self, other: QtWidgets.QTableWidgetItem) -> bool:
+        mine, theirs = self.data(_SORT_ROLE), other.data(_SORT_ROLE)
+        try:
+            return bool(mine < theirs)
+        except TypeError:
+            return super().__lt__(other)
+
+
+def _number_key(value: int | None) -> float:
+    return float(value) if value is not None else float("-inf")
+
+
 class SearchPanel(QtWidgets.QWidget):
     """Search a series name, pick a series, then pick an issue, without leaving the panel."""
 
@@ -68,9 +91,13 @@ class SearchPanel(QtWidgets.QWidget):
     canceled = QtCore.pyqtSignal()
     ratelimit = QtCore.pyqtSignal(float, float)
 
-    def __init__(self, parent: QtWidgets.QWidget | None, cache_dir: pathlib.Path | None) -> None:
+    def __init__(
+        self, parent: QtWidgets.QWidget | None, cache_dir: pathlib.Path | None, cancel_text: str = "Back to matches"
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("searchPanel")
+        self.literal = False
+        self._loaded_series_id: str | None = None
         self.config: ct_ns | None = None
         self.talker: ComicTalker | None = None
         self.year: int | None = None
@@ -107,7 +134,7 @@ class SearchPanel(QtWidgets.QWidget):
         self.btnUse.setDefault(True)
         self.btnUse.setEnabled(False)
         self.btnUse.clicked.connect(self.choose)
-        self.btnCancel = QtWidgets.QPushButton("Back to matches")
+        self.btnCancel = QtWidgets.QPushButton(cancel_text)
         self.btnCancel.clicked.connect(self.cancel)
 
         query = QtWidgets.QHBoxLayout()
@@ -147,12 +174,47 @@ class SearchPanel(QtWidgets.QWidget):
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().hide()
         table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSortIndicatorShown(True)
+        table.setSortingEnabled(True)
         return table
+
+    @staticmethod
+    def _fill(table: QtWidgets.QTableWidget, rows: list[tuple[object, list[tuple[str, object]]]]) -> None:
+        """Fill a table in the given order; clicking a header sorts it afterwards."""
+        table.blockSignals(True)
+        table.setSortingEnabled(False)
+        table.setRowCount(len(rows))
+        for row, (value, cells) in enumerate(rows):
+            for col, (text, key) in enumerate(cells):
+                cell = _SortableItem(text, key)
+                if col == 0:
+                    cell.setData(QtCore.Qt.ItemDataRole.UserRole, value)
+                table.setItem(row, col, cell)
+        # No sort column, so the list keeps its best-match-first order until the user picks one.
+        table.horizontalHeader().setSortIndicator(-1, QtCore.Qt.SortOrder.AscendingOrder)
+        table.setSortingEnabled(True)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        table.blockSignals(False)
+
+    @staticmethod
+    def _value(table: QtWidgets.QTableWidget, row: int) -> Any:
+        cell = table.item(row, 0) if row >= 0 else None
+        return cell.data(QtCore.Qt.ItemDataRole.UserRole) if cell is not None else None
 
     # ----- public -----
 
-    def start(self, series_name: str, issue_number: str, year: int | None, config: ct_ns, talker: ComicTalker) -> None:
+    def start(
+        self,
+        series_name: str,
+        issue_number: str,
+        year: int | None,
+        config: ct_ns,
+        talker: ComicTalker,
+        literal: bool = False,
+    ) -> None:
         """Fill the query from what's known about the archive and search right away."""
+        self.literal = literal
         self.config = config
         self.talker = talker
         self.year = year
@@ -176,6 +238,7 @@ class SearchPanel(QtWidgets.QWidget):
         self._run(
             lambda: talker.search_for_series(
                 name,
+                literal=self.literal,
                 on_rate_limit=RLCallBack(lambda full, sleep: self.ratelimit.emit(full, sleep), 10),
             ),
             self._series_found,
@@ -192,12 +255,10 @@ class SearchPanel(QtWidgets.QWidget):
         self.canceled.emit()
 
     def current_series(self) -> ComicSeries | None:
-        row = self.seriesTable.currentRow()
-        return self.series[row] if 0 <= row < len(self.series) else None
+        return self._value(self.seriesTable, self.seriesTable.currentRow())
 
     def current_issue(self) -> GenericMetadata | None:
-        row = self.issueTable.currentRow()
-        return self.issues[row] if 0 <= row < len(self.issues) else None
+        return self._value(self.issueTable, self.issueTable.currentRow())
 
     def wait_for_idle(self, ms: int = 5000) -> None:
         for call in list(self._calls):
@@ -233,6 +294,7 @@ class SearchPanel(QtWidgets.QWidget):
     def _clear_results(self) -> None:
         self.series = []
         self.issues = []
+        self._loaded_series_id = None
         self.seriesTable.setRowCount(0)
         self.issueTable.setRowCount(0)
         self.cover.clear()
@@ -254,25 +316,29 @@ class SearchPanel(QtWidgets.QWidget):
             self.status.setText("No series found. Try a shorter or different name.")
             return
         self.status.setText(f"{len(series)} series found. Pick one, then pick the issue.")
-        self.seriesTable.blockSignals(True)
-        self.seriesTable.setRowCount(len(series))
-        for row, s in enumerate(series):
-            values = (s.name, s.start_year or "", s.count_of_issues or "", s.publisher or "")
-            for col, value in enumerate(values):
-                cell = QtWidgets.QTableWidgetItem(str(value))
-                cell.setToolTip(str(value))
-                self.seriesTable.setItem(row, col, cell)
-        self.seriesTable.resizeColumnsToContents()
-        self.seriesTable.horizontalHeader().setStretchLastSection(True)
-        self.seriesTable.blockSignals(False)
+        self._fill(
+            self.seriesTable,
+            [
+                (
+                    s,
+                    [
+                        (s.name, s.name.casefold()),
+                        (str(s.start_year or ""), _number_key(s.start_year)),
+                        (str(s.count_of_issues or ""), _number_key(s.count_of_issues)),
+                        (str(s.publisher or ""), str(s.publisher or "").casefold()),
+                    ],
+                )
+                for s in series
+            ],
+        )
         self.seriesTable.setCurrentCell(0, 0)
 
     def _series_changed(self, row: int, _col: int, prev_row: int, _prev_col: int) -> None:
-        if row == prev_row:
-            return
         series = self.current_series()
-        if series is None or self.talker is None:
+        # Sorting moves rows around without changing the selected series.
+        if series is None or self.talker is None or series.id == self._loaded_series_id:
             return
+        self._loaded_series_id = series.id
         talker = self.talker
         self.issues = []
         self.issueTable.setRowCount(0)
@@ -299,17 +365,15 @@ class SearchPanel(QtWidgets.QWidget):
             self.status.setText("This series has no issues listed. Pick another series.")
             return
         self.status.setText(f"{len(issues)} issues in {series.name if series else 'this series'}.")
-        self.issueTable.blockSignals(True)
-        self.issueTable.setRowCount(len(issues))
-        for row, issue in enumerate(issues):
+        rows: list[tuple[object, list[tuple[str, object]]]] = []
+        for issue in issues:
             date = f"{issue.year or '????'}" + (f"-{int(issue.month):02d}" if issue.month else "")
-            for col, value in enumerate((issue.issue or "", date, issue.title or "")):
-                cell = QtWidgets.QTableWidgetItem(str(value))
-                cell.setToolTip(str(value))
-                self.issueTable.setItem(row, col, cell)
-        self.issueTable.resizeColumnsToContents()
-        self.issueTable.horizontalHeader().setStretchLastSection(True)
-        self.issueTable.blockSignals(False)
+            date_key = (issue.year or 0, issue.month or 0, issue.day or 0)
+            title = issue.title or ""
+            rows.append(
+                (issue, [(issue.issue or "", issue_sort_key(issue)), (date, date_key), (title, title.casefold())])
+            )
+        self._fill(self.issueTable, rows)
         self._select_issue_number()
 
     def _issue_number_changed(self) -> None:
@@ -319,7 +383,8 @@ class SearchPanel(QtWidgets.QWidget):
             self.search()
 
     def _select_issue_number(self) -> None:
-        row = best_issue_row(self.issues, self.leIssue.text().strip())
+        wanted = self.issues[best_issue_row(self.issues, self.leIssue.text().strip())]
+        row = next(r for r in range(self.issueTable.rowCount()) if self._value(self.issueTable, r) is wanted)
         self.issueTable.setCurrentCell(row, 0)
         self._issue_changed(row, 0, -1, -1)
 
