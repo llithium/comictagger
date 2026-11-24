@@ -560,3 +560,51 @@ def test_page_scan_continues_after_bad_image(tmp_comic):
     assert md.pages[0].byte_size == len(b"invalid image")
     assert md.pages[0].width is None
     assert all(p.width and p.height for p in md.pages[1:])
+
+
+def test_seven_zip_tag_write_decompresses_the_archive_once(cbz, tmp_path, monkeypatch):
+    """A solid 7z must not be decompressed once per page when tags are written (it froze the UI for minutes)."""
+    py7zr = pytest.importorskip("py7zr")
+    path = tmp_path / "solid.cbz"  # 7z data with a .cbz name, as some releases ship
+    assert SevenZipArchiver.open(path).copy_from_archive(cbz.archiver)
+    archive = comicapi.comicarchive.ComicArchive(path)
+    assert archive.archiver.name() == "Seven Zip"
+    page_count = archive.get_number_of_pages()
+    assert page_count > 1
+
+    opened = []
+    original_init = py7zr.SevenZipFile.__init__
+
+    def counting_init(self, file, mode="r", *args, **kwargs):
+        opened.append(mode)
+        original_init(self, file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(py7zr.SevenZipFile, "__init__", counting_init)
+    md = comicapi.genericmetadata.GenericMetadata(series="Solid", issue="1")
+    assert archive.write_tags(md, "cr")
+
+    assert opened.count("r") < page_count
+    archive.reset_cache()
+    written = archive.read_tags("cr")
+    assert written.series == "Solid"
+    assert all(page.width and page.height for page in written.pages)
+
+
+def test_seven_zip_rewrite_puts_the_replacement_first(tmp_path):
+    py7zr = pytest.importorskip("py7zr")
+    path = tmp_path / "tagged.cb7"
+    with py7zr.SevenZipFile(path, "w") as output:
+        output.writestr(b"page 1", "001.jpg")
+        output.writestr(b"page 2", "002.jpg")
+        output.writestr(b"<ComicInfo/>", "ComicInfo.xml")
+
+    assert SevenZipArchiver.open(path).write_file("ComicInfo.xml", b"<ComicInfo><Series>New</Series></ComicInfo>")
+
+    with py7zr.SevenZipFile(path, "r") as archive:
+        assert archive.getnames()[0] == "ComicInfo.xml"
+        contents = {name: data.read() for name, data in archive.readall().items()}
+    assert contents == {
+        "ComicInfo.xml": b"<ComicInfo><Series>New</Series></ComicInfo>",
+        "001.jpg": b"page 1",
+        "002.jpg": b"page 2",
+    }

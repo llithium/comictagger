@@ -24,8 +24,10 @@ from comictalker.comictalker import ComicTalker, RLCallBack, TalkerError
 
 logger = logging.getLogger(__name__)
 
+SAVING_STATUS = "Saving tags to the archive. You can keep working while this finishes."
 
-class _Call(QtCore.QThread):
+
+class BackgroundCall(QtCore.QThread):
     """Run one blocking call off the UI thread and report the outcome."""
 
     succeeded = QtCore.pyqtSignal(int, object)
@@ -105,7 +107,9 @@ class SearchPanel(QtWidgets.QWidget):
         self.series: list[ComicSeries] = []
         self.issues: list[GenericMetadata] = []
         self._token = 0
-        self._calls: set[_Call] = set()
+        self._calls: set[BackgroundCall] = set()
+        self._saving = False
+        self._status_before_save = ""
 
         self.leSeries = QtWidgets.QLineEdit()
         self.leSeries.setPlaceholderText("Series name")
@@ -248,6 +252,8 @@ class SearchPanel(QtWidgets.QWidget):
         )
 
     def choose(self) -> None:
+        if self._saving:
+            return
         series = self.current_series()
         issue = self.current_issue()
         if series is not None and issue is not None:
@@ -263,6 +269,18 @@ class SearchPanel(QtWidgets.QWidget):
     def current_issue(self) -> GenericMetadata | None:
         return self._value(self.issueTable, self.issueTable.currentRow())
 
+    def set_saving(self, saving: bool) -> None:
+        """Hold the Use button while the chosen issue is being written, so it can't be sent twice."""
+        if saving == self._saving:
+            return
+        self._saving = saving
+        if saving:
+            self._status_before_save = self.status.text()
+            self.status.setText(SAVING_STATUS)
+        elif self.status.text() == SAVING_STATUS:
+            self.status.setText(self._status_before_save)
+        self._label_use()
+
     def wait_for_idle(self, ms: int = 5000) -> None:
         for call in list(self._calls):
             call.wait(ms)
@@ -271,7 +289,7 @@ class SearchPanel(QtWidgets.QWidget):
 
     def _run(self, fn: Callable[[], Any], done: Callable[[Any], None]) -> None:
         self._token += 1
-        call = _Call(self._token, fn, self)
+        call = BackgroundCall(self._token, fn, self)
         self._calls.add(call)
 
         def finished(token: int, value: object) -> None:
@@ -393,10 +411,17 @@ class SearchPanel(QtWidgets.QWidget):
 
     def _issue_changed(self, row: int, _col: int, prev_row: int, _prev_col: int) -> None:
         issue = self.current_issue()
-        self.btnUse.setEnabled(issue is not None)
         if issue is not None:
             urls = [image.URL for image in [issue._cover_image, *issue._alternate_images] if image]
             self.cover.set_url_list(urls)
+        self._label_use()
+
+    def _label_use(self) -> None:
+        issue = self.current_issue()
+        self.btnUse.setEnabled(issue is not None and not self._saving)
+        if self._saving:
+            self.btnUse.setText("Saving tags…")
+        elif issue is not None:
             self.btnUse.setText(f"Use issue #{issue.issue}" if issue.issue else "Use this issue")
 
 
