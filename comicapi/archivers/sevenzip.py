@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from comicapi.archivers.archiver import Archiver, archive_replacement, read_archive
 
@@ -35,6 +37,33 @@ class SevenZipArchiver(Archiver):
             raise
 
         return data
+
+    @contextmanager
+    def read_session(self) -> Iterator[Callable[[str], bytes]]:
+        """Read many members with one pass over the archive.
+
+        7z archives are usually solid, so reading one member means decompressing every member stored before
+        it. Calling read_file once per page is quadratic and takes minutes on a large comic. The first read in a
+        session decompresses everything once and later reads are served from memory.
+        """
+        members: dict[str, bytes] | None = None
+
+        def read(archive_file: str) -> bytes:
+            nonlocal members
+            if members is None:
+                members = {}
+                try:
+                    with py7zr.SevenZipFile(self.path, "r") as zf:
+                        members = {name: buffer.read() for name, buffer in (zf.readall() or {}).items()}
+                except (py7zr.Bad7zFile, OSError) as e:
+                    logger.error("Error reading 7zip archive [%s]: %s", e, self.path)
+            # Each member is usually read once, so hand it over and free the memory.
+            data = members.pop(archive_file, None)
+            if data is None:
+                return self.read_file(archive_file)
+            return data
+
+        yield read
 
     def remove_file(self, archive_file: str) -> bool:
         return self.rebuild([archive_file])
@@ -80,13 +109,15 @@ class SevenZipArchiver(Archiver):
                     py7zr.SevenZipFile(self.path, mode="r") as zin,
                     py7zr.SevenZipFile(replacement_file.staged, mode="w") as zout,
                 ):
+                    # Write the replacement (usually the tag file) first. In a solid archive a member can only be
+                    # read by decompressing everything stored before it, so tags at the front stay quick to read.
+                    if replacement is not None:
+                        filename, data = replacement
+                        zout.writestr(data, filename)
                     # Read retained members together because 7z compression can be solid.
                     targets = [name for name in zin.getnames() if name not in exclude_list]
                     for filename, buffer in zin.read(targets).items():
                         zout.writef(buffer, filename)
-                    if replacement is not None:
-                        filename, data = replacement
-                        zout.writestr(data, filename)
         except (py7zr.Bad7zFile, OSError) as e:
             logger.error("Error rebuilding 7zip file [%s]: %s", e, self.path)
             return False

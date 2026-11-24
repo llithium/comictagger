@@ -26,7 +26,7 @@ from comictaggerlib.ctsettings import ct_ns
 from comictaggerlib.md import parse_archive_filename, prepare_metadata, read_configured_tags, write_selected_tags
 from comictaggerlib.optionalmsgdialog import OptionalMessageDialog
 from comictaggerlib.resulttypes import Action, IssueResult, MatchStatus, OnlineMatchResults, Result, Status
-from comictaggerlib.searchpanel import SearchPanel, query_from_metadata
+from comictaggerlib.searchpanel import BackgroundCall, SearchPanel, query_from_metadata
 from comictaggerlib.workspacestyle import DEFAULT_COLORS, Painter, ThumbnailCache, chip, section_label, set_property
 from comictalker.comictalker import ComicTalker, TalkerError
 
@@ -160,45 +160,53 @@ def metadata_diff(current: GenericMetadata, candidate: GenericMetadata) -> list[
     return rows
 
 
-def write_match(
-    parent: QtWidgets.QWidget, ca: ComicArchive, issue_id: str, config: ct_ns, talker: ComicTalker
-) -> GenericMetadata | None:
-    """Fetch the full issue for a chosen match and write it to the archive. Reports problems to the user."""
+@dataclasses.dataclass
+class WriteOutcome:
+    """What happened when tags were written for one archive. A failure carries the message to show."""
+
+    md: GenericMetadata | None = None
+    title: str = ""
+    message: str = ""
+    level: str = "critical"
+
+
+def write_match(ca: ComicArchive, issue_id: str, config: ct_ns, talker: ComicTalker) -> WriteOutcome:
+    """Fetch the full issue for a chosen match and write it to the archive.
+
+    This reads and rewrites the archive and talks to the network, so the review panel runs it on a worker thread.
+    It must not touch any widgets.
+    """
     md, _, error = read_configured_tags(ca, config.Runtime_Options__tags_read, config)
     if error is not None:
         logger.error("Failed to load tags for %s: %s", ca.path, error)
-        OptionalMessageDialog.critical(
-            parent, "Read Failed!", f"One or more of the read tags failed to load for {ca.path}, check log for details"
+        return WriteOutcome(
+            title="Read Failed!",
+            message=f"One or more of the read tags failed to load for {ca.path}, check log for details",
         )
-        return None
     if md.is_empty:
         md = parse_archive_filename(ca, config)
 
-    QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.CursorShape.WaitCursor))
     try:
-        try:
-            ct_md = talker.fetch_comic_data(issue_id=issue_id)
-        except TalkerError as e:
-            QtWidgets.QApplication.restoreOverrideCursor()
-            OptionalMessageDialog.critical(parent, f"{e.source} {e.code_name} Error", str(e))
-            return None
-        if ct_md is None or ct_md.is_empty:
-            QtWidgets.QApplication.restoreOverrideCursor()
-            OptionalMessageDialog.critical(parent, "Network Issue", "Could not retrieve issue details!")
-            return None
-        md = prepare_metadata(md, ct_md, config)
-        _, failed = write_selected_tags(ca, md, config.Runtime_Options__tags_write)
-        ca.reset_cache()
-    finally:
-        if QtWidgets.QApplication.overrideCursor() is not None:
-            QtWidgets.QApplication.restoreOverrideCursor()
+        ct_md = talker.fetch_comic_data(issue_id=issue_id)
+    except TalkerError as e:
+        return WriteOutcome(title=f"{e.source} {e.code_name} Error", message=str(e))
+    if ct_md is None or ct_md.is_empty:
+        return WriteOutcome(title="Network Issue", message="Could not retrieve issue details!")
+    md = prepare_metadata(md, ct_md, config)
+    return write_tags(ca, md, config.Runtime_Options__tags_write)
 
+
+def write_tags(ca: ComicArchive, md: GenericMetadata, tag_ids: Iterable[str], again: bool = False) -> WriteOutcome:
+    """Write already prepared tags to the archive. Safe to run on a worker thread."""
+    _, failed = write_selected_tags(ca, md, tag_ids)
+    ca.reset_cache()
     if failed is not None:
-        OptionalMessageDialog.warning(
-            parent, "Write Error", f"Saving {tags[failed].name()} tags to the archive failed!"
+        return WriteOutcome(
+            title="Write Error",
+            message=f"Saving {tags[failed].name()} tags to the archive failed{' again' if again else ''}!",
+            level="warning",
         )
-        return None
-    return md
+    return WriteOutcome(md=md)
 
 
 def _shortcut(widget: QtWidgets.QWidget, keys: str, slot: Callable[[], object]) -> QtGui.QShortcut:
@@ -284,8 +292,11 @@ class FileDelegate(QtWidgets.QStyledItemDelegate):
         metrics = QtGui.QFontMetrics(font)
         name = metrics.elidedText(item.name, QtCore.Qt.TextElideMode.ElideMiddle, rect.right() - text_left)
         painter.drawText(text_left, rect.top() + metrics.ascent() + 2, name)
-        tone = "ok" if item.resolution else OUTCOME_TONES[item.outcome]
-        self.draw.chip(painter, text_left, rect.top() + metrics.height() + 8, item.reason, tone, option.font)
+        if item is self.panel._writing:
+            reason, tone = "Saving tags…", "warn"
+        else:
+            reason, tone = item.reason, "ok" if item.resolution else OUTCOME_TONES[item.outcome]
+        self.draw.chip(painter, text_left, rect.top() + metrics.height() + 8, reason, tone, option.font)
         painter.restore()
 
 
@@ -435,6 +446,9 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self._run_archives: list[ComicArchive] = []
         self._thumbs = ThumbnailCache(self)
         self.running = False
+        self._writing: ReviewItem | None = None
+        self._write_call: BackgroundCall | None = None
+        self._shown: ReviewItem | None = None
 
         # ----- sidebar -----
         self.categoryList = QtWidgets.QListWidget()
@@ -827,10 +841,15 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         """Move an archive to the Tagged group and open the next one in the current group."""
         group = self.items_in(self._outcome)
         row = group.index(item) if item in group else -1
+        current = self.current_item()
         item.outcome = Outcome.tagged
         item.resolution = resolution
         item.reason = resolution
-        self._refresh(select_row=row)
+        if current is not None and current is not item:
+            # A save finished while the user had moved on, so stay where they are.
+            self._refresh(keep=current)
+        else:
+            self._refresh(select_row=row)
 
     def mark_fixed(self, archive: ComicArchive) -> None:
         """Called when the user saves an archive in the editor."""
@@ -855,19 +874,12 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
                 self.searchPanel.choose()
             return
         item = self.current_item()
-        if item is None or self.config is None or not self.btnAccept.isEnabled():
+        if item is None or self.config is None or self.writing or not self.btnAccept.isEnabled():
             return
         if item.can_retry_write:
             assert item.result is not None and item.result.md is not None
-            _, failed = write_selected_tags(item.archive, item.result.md, self.config.Runtime_Options__tags_write)
-            item.archive.reset_cache()
-            if failed is not None:
-                OptionalMessageDialog.warning(
-                    self, "Write Error", f"Saving {tags[failed].name()} tags to the archive failed again."
-                )
-                return
-            self.resolve(item, "Written on retry")
-            self.matchesWritten.emit([item.archive])
+            md, tag_ids = item.result.md, list(self.config.Runtime_Options__tags_write)
+            self._write_in_background(item, "Written on retry", lambda: write_tags(item.archive, md, tag_ids, True))
             return
         match = self.current_candidate()
         if match is None or self.talker is None:
@@ -875,17 +887,80 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         assert match.md.issue_id
         self._write(item, match.md.issue_id, "Accepted")
 
-    def _write(self, item: ReviewItem, issue_id: str, resolution: str) -> bool:
+    def _write(self, item: ReviewItem, issue_id: str, resolution: str) -> None:
         assert self.config is not None and self.talker is not None
-        md = write_match(self, item.archive, issue_id, self.config, self.talker)
-        if md is None:
-            return False
+        config, talker = self.config, self.talker
+        self._write_in_background(item, resolution, lambda: write_match(item.archive, issue_id, config, talker))
+
+    @property
+    def writing(self) -> bool:
+        """True while tags are being saved to an archive."""
+        return self._writing is not None
+
+    def _write_in_background(self, item: ReviewItem, resolution: str, job: Callable[[], WriteOutcome]) -> None:
+        """Save tags on a worker thread so the window keeps responding.
+
+        Saving can take a while: a 7z archive is decompressed and recompressed, and the issue details come from
+        the network. One save runs at a time; the archive moves to Tagged when it's done.
+        """
+        if self._writing is not None:
+            return
+        self._writing = item
+        self._show_saving()
+        call = BackgroundCall(0, job, self)
+        self._write_call = call
+        call.succeeded.connect(lambda _token, outcome: self._write_done(item, resolution, outcome))
+        call.failed.connect(
+            lambda _token, error: self._write_done(
+                item, resolution, WriteOutcome(title="Write Error", message=f"Saving tags failed: {error}")
+            )
+        )
+        call.finished.connect(call.deleteLater)
+        call.start()
+
+    def _write_done(self, item: ReviewItem, resolution: str, outcome: object) -> None:
+        self._writing = None
+        self._write_call = None
+        self._show_saving()
+        assert isinstance(outcome, WriteOutcome)
+        if outcome.md is None:
+            show = OptionalMessageDialog.warning if outcome.level == "warning" else OptionalMessageDialog.critical
+            show(self, outcome.title, outcome.message)
+            return
         if item.result is not None:
-            item.result.md = md
+            item.result.md = outcome.md
         self._thumbs.forget(item.archive.path)
-        self.resolve(item, resolution)
+        if item in self.items:
+            self.resolve(item, resolution)
         self.matchesWritten.emit([item.archive])
-        return True
+
+    def _show_saving(self) -> None:
+        """Reflect whether a save is running on the buttons, the file card and the search panel."""
+        saving = self._writing is not None
+        viewport = self.fileList.viewport()
+        if viewport is not None:
+            viewport.update()
+        current = self.current_item()
+        if current is not None and current is self._writing:
+            self.reasonLabel.setText("Saving tags…")
+            set_property(self.reasonLabel, "tone", "warn")
+        elif current is not None:
+            self.reasonLabel.setText(current.reason)
+            set_property(self.reasonLabel, "tone", "ok" if current.resolution else OUTCOME_TONES[current.outcome])
+        if saving:
+            self.btnAccept.setEnabled(False)
+            self.btnAccept.setText("Saving tags…")
+        elif current is not None:
+            self.btnAccept.setEnabled(bool(self.candidateStrip.count()) or current.can_retry_write)
+            self._label_accept()
+        self.searchPanel.set_saving(saving)
+
+    def wait_for_idle(self, ms: int = 30000) -> None:
+        """Let a running save finish, so closing the window doesn't cut an archive rewrite short."""
+        call = self._write_call
+        if call is not None:
+            call.wait(ms)
+        self.searchPanel.wait_for_idle()
 
     def search_current(self) -> None:
         """Swap the matches for a series and issue search, prefilled from the archive."""
@@ -906,7 +981,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
 
     def _search_chose(self, issue: GenericMetadata, _series: object) -> None:
         item = self.current_item()
-        if item is None or not issue.issue_id:
+        if item is None or not issue.issue_id or self.writing:
             return
         self._write(item, issue.issue_id, "Picked by search")
 
@@ -960,7 +1035,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         entry.setToolTip(str(item.archive.path))
         return entry
 
-    def _refresh(self, select_row: int = 0) -> None:
+    def _refresh(self, select_row: int = 0, keep: ReviewItem | None = None) -> None:
         self._update_counts()
         group = self.items_in(self._outcome)
         self.fileList.blockSignals(True)
@@ -968,6 +1043,17 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         for item in group:
             self.fileList.addItem(self._list_entry(item))
         self.fileList.blockSignals(False)
+
+        if keep is not None and keep in group:
+            select_row = group.index(keep)
+            if keep is self._shown:
+                # Same archive still on screen: just move the selection, so a search in progress isn't lost.
+                self.fileList.blockSignals(True)
+                self.fileList.setCurrentRow(select_row)
+                self.fileList.blockSignals(False)
+                self.positionLabel.setText(f"{select_row + 1} of {self.fileList.count()}")
+                self.btnSkip.setEnabled(select_row + 1 < self.fileList.count())
+                return
 
         if group:
             self.fileList.setCurrentRow(max(0, min(select_row, len(group) - 1)))
@@ -982,6 +1068,7 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
 
     def _file_changed(self, row: int) -> None:
         item = self.current_item()
+        self._shown = item
         if self._searching():
             self.searchPanel.cancel()
         self.bodyStack.setCurrentWidget(self.reviewPage)
@@ -1029,10 +1116,14 @@ class AutoTagReviewPanel(QtWidgets.QWidget):
         self.btnAccept.setEnabled(bool(candidates) or item.can_retry_write)
         self._label_accept()
         self.btnSkip.setEnabled(row + 1 < self.fileList.count())
+        if self.writing:
+            self._show_saving()
 
     def _label_accept(self) -> None:
         item = self.current_item()
-        if item is not None and item.can_retry_write:
+        if self.writing:
+            self.btnAccept.setText("Saving tags…")
+        elif item is not None and item.can_retry_write:
             self.btnAccept.setText("Retry write   Enter")
         elif self.candidateStrip.count():
             self.btnAccept.setText(f"Accept match {self.candidateStrip.current_index() + 1}   Enter")

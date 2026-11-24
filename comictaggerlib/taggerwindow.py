@@ -2251,6 +2251,11 @@ class TaggerWindow(QtWidgets.QMainWindow):
         if self.auto_tag_running():
             self.show_review()
             return
+        if self.autoTagReview.writing:
+            OptionalMessageDialog.information(
+                self, "Auto-Tag", "Tags are still being saved to an archive. Try again when that finishes."
+            )
+            return
         ca_list = self.fileSelectionList.get_selected_archive_list()
         tag_names = ", ".join([tags[tag_id].name() for tag_id in self.config[0].Runtime_Options__tags_write])
 
@@ -2524,7 +2529,7 @@ class TaggerWindow(QtWidgets.QMainWindow):
             if self.auto_tag_running():
                 self.autotagthread.cancel()
                 self.autotagthread.wait(10000)
-            self.autoTagReview.searchPanel.wait_for_idle()
+            self.autoTagReview.wait_for_idle()
             self.searchPanel.wait_for_idle()
             appsize = self.size()
             self.config[0].internal__window_width = appsize.width()

@@ -121,7 +121,8 @@ def test_accepting_a_match_writes_it_and_moves_to_the_next_archive(panel, qtbot,
     monkeypatch.setattr(
         autotagreview,
         "write_match",
-        lambda parent, ca, issue_id, config, talker: written.append((ca.path.name, issue_id)) or GenericMetadata(),
+        lambda ca, issue_id, config, talker: written.append((ca.path.name, issue_id))
+        or autotagreview.WriteOutcome(GenericMetadata()),
     )
     panel.candidateStrip.set_current(1)
 
@@ -136,13 +137,81 @@ def test_accepting_a_match_writes_it_and_moves_to_the_next_archive(panel, qtbot,
     assert panel.item_for(signal.args[0][0]).resolution == "Accepted"
 
 
-def test_failed_write_keeps_the_archive_in_review(panel, monkeypatch):
-    monkeypatch.setattr(autotagreview, "write_match", lambda *args: None)
+def test_failed_write_keeps_the_archive_in_review(panel, qtbot, monkeypatch):
+    monkeypatch.setattr(
+        autotagreview, "write_match", lambda *args: autotagreview.WriteOutcome(title="Network Issue", message="down")
+    )
+    shown = []
+    monkeypatch.setattr(autotagreview.OptionalMessageDialog, "critical", lambda *args: shown.append(args[1:]))
 
     panel.accept_current()
+    qtbot.waitUntil(lambda: not panel.writing)
 
+    assert shown == [("Network Issue", "down")]
+    assert panel.btnAccept.isEnabled()
     assert panel.current_item().name == "saga.cbz"
     assert panel.item_for(panel.current_item().archive).outcome == Outcome.needs_review
+
+
+def test_saving_runs_in_the_background_and_blocks_a_second_save(panel, qtbot, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    calls = []
+
+    def slow_write(ca, issue_id, config, talker):
+        calls.append((ca.path.name, threading.current_thread() is threading.main_thread()))
+        release.wait(5)
+        return autotagreview.WriteOutcome(GenericMetadata())
+
+    monkeypatch.setattr(autotagreview, "write_match", slow_write)
+
+    panel.accept_current()
+    # The UI thread is free while the archive is written.
+    qtbot.waitUntil(lambda: bool(calls))
+    assert panel.writing
+    assert not panel.btnAccept.isEnabled()
+    assert panel.btnAccept.text() == "Saving tags…"
+    assert panel.reasonLabel.text() == "Saving tags…"
+    panel.accept_current()  # ignored while saving
+    panel.next_item()  # moving on is allowed
+    assert panel.current_item().name == "fables.cbz"
+    assert not panel.btnAccept.isEnabled()
+
+    with qtbot.waitSignal(panel.matchesWritten):
+        release.set()
+
+    assert calls == [("saga.cbz", False)]
+    assert not panel.writing
+    assert [i.name for i in panel.items_in(Outcome.tagged)] == ["saga.cbz", "tagged.cbz"]
+    # The user stays on the archive they moved to.
+    assert panel.current_item().name == "fables.cbz"
+    assert panel.btnAccept.isEnabled()
+
+
+def test_search_in_progress_survives_another_archive_finishing(panel, qtbot, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(
+        autotagreview,
+        "write_match",
+        lambda *args: release.wait(5) and autotagreview.WriteOutcome(GenericMetadata()),
+    )
+    panel.talker.name = "Test"
+    panel.talker.search_for_series.return_value = []
+    panel.accept_current()
+    qtbot.waitUntil(lambda: panel.writing)
+    panel.next_item()
+    panel.search_current()
+    assert panel.bodyStack.currentWidget() is panel.searchPanel
+    assert not panel.searchPanel.btnUse.isEnabled()
+
+    with qtbot.waitSignal(panel.matchesWritten):
+        release.set()
+
+    assert panel.current_item().name == "fables.cbz"
+    assert panel.bodyStack.currentWidget() is panel.searchPanel
 
 
 def series_result(name: str, series_id: str, year: int) -> ComicSeries:
@@ -162,7 +231,7 @@ def test_no_match_archives_are_fixed_with_the_embedded_search(panel, qtbot, monk
     monkeypatch.setattr(
         autotagreview,
         "write_match",
-        lambda parent, ca, issue_id, config, talker: written.append(issue_id) or GenericMetadata(),
+        lambda ca, issue_id, config, talker: written.append(issue_id) or autotagreview.WriteOutcome(GenericMetadata()),
     )
     panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
     assert panel.current_item().name == "lost.cbz"
@@ -182,7 +251,8 @@ def test_no_match_archives_are_fixed_with_the_embedded_search(panel, qtbot, monk
     search._issue_number_changed()
     assert search.current_issue().issue_id == "i2"
 
-    search.btnUse.click()
+    with qtbot.waitSignal(panel.matchesWritten):
+        search.btnUse.click()
 
     assert written == ["i2"]
     lost = next(i for i in panel.items if i.name == "lost.cbz")
@@ -264,7 +334,8 @@ def test_write_failures_can_be_retried(tmp_path, config, qtbot, monkeypatch):
     )
 
     assert panel.btnAccept.text().startswith("Retry write")
-    panel.accept_current()
+    with qtbot.waitSignal(panel.matchesWritten):
+        panel.accept_current()
 
     assert writes == ["Low"]
     assert panel.items[0].outcome == Outcome.tagged
