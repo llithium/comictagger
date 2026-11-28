@@ -21,7 +21,7 @@ from comictaggerlib.resulttypes import (
     Score,
     Status,
 )
-from comictaggerlib.searchpanel import best_issue_row
+from comictaggerlib.searchpanel import best_issue_row, filter_publishers
 from testing.filenames import cbz_path
 
 
@@ -391,6 +391,47 @@ def test_workspace_run_does_not_block_and_skips_files_saved_by_hand(workspace, r
     thread.autoTagComplete.emit(results, [])
     assert workspace.actionAutoTag.isEnabled()
     assert not workspace.autoTagReview.running
+
+
+def test_filter_publishers_ignores_case_and_spaces():
+    series = [
+        ComicSeries("s1", "Vampirella", set(), 17, None, "", "", "Splitter", 1998, None),
+        ComicSeries("s2", "Vampirella Horror Classics", set(), 1, None, "", "", "mg/publishing", 2000, None),
+        ComicSeries("s3", "Vampirella", set(), 22, None, "", "", None, 2001, None),
+    ]
+    assert [s.id for s in filter_publishers(series, [" splitter ", ""])] == ["s2", "s3"]
+    assert [s.id for s in filter_publishers(series, [])] == ["s1", "s2", "s3"]
+
+
+def test_embedded_search_hides_filtered_publishers(panel, qtbot):
+    panel.config.Auto_Tag__use_publisher_filter = True
+    panel.config.Auto_Tag__publisher_filter = ["Panini Comics", "Splitter"]
+    panel.talker.name = "Test"
+    panel.talker.search_for_series.return_value = [
+        ComicSeries("s1", "Lost", set(), 17, None, "", "", "Splitter", 1998, None),
+        series_result("Lost", "s2", 2004),
+        ComicSeries("s3", "Lost Girls", set(), 3, None, "", "", "SPLITTER ", 1991, None),
+    ]
+    panel.talker.fetch_issues_in_series.return_value = [GenericMetadata(issue="1", issue_id="i1")]
+    panel.categoryList.setCurrentRow(list(Outcome).index(Outcome.no_match))
+    panel.search_current()
+    search = panel.searchPanel
+    qtbot.waitUntil(lambda: search.issueTable.rowCount() == 1)
+    ids = lambda: [search._value(search.seriesTable, r).id for r in range(search.seriesTable.rowCount())]  # noqa: E731
+
+    assert search.cbxPublisherFilter.isChecked()
+    assert ids() == ["s2"]
+    assert search.status.text() == "1 issues in Lost. 2 series hidden by the publisher filter."
+
+    search.cbxPublisherFilter.setChecked(False)  # shows them again without searching again
+    assert sorted(ids()) == ["s1", "s2", "s3"]
+    assert panel.talker.search_for_series.call_count == 1
+    assert panel.config.Auto_Tag__use_publisher_filter  # the setting itself is left alone
+
+    panel.config.Auto_Tag__publisher_filter = ["Splitter", "Image"]
+    search.cbxPublisherFilter.setChecked(True)
+    assert ids() == []
+    assert "Untick" in search.status.text()
 
 
 def test_search_results_sort_by_column_without_reloading(panel, qtbot):

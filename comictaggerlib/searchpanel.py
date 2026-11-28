@@ -82,6 +82,12 @@ class _SortableItem(QtWidgets.QTableWidgetItem):
             return super().__lt__(other)
 
 
+def filter_publishers(series: list[ComicSeries], publisher_filter: list[str]) -> list[ComicSeries]:
+    """Drop series whose publisher is in the filter, ignoring case and surrounding spaces."""
+    blocked = {p.strip().casefold() for p in publisher_filter if p.strip()}
+    return [s for s in series if str(s.publisher or "").strip().casefold() not in blocked]
+
+
 def _number_key(value: int | None) -> float:
     return float(value) if value is not None else float("-inf")
 
@@ -105,6 +111,8 @@ class SearchPanel(QtWidgets.QWidget):
         self.talker: ComicTalker | None = None
         self.year: int | None = None
         self.series: list[ComicSeries] = []
+        self._found: list[ComicSeries] = []  # every result, before the publisher filter
+        self._hidden = 0  # results the publisher filter is hiding
         self.issues: list[GenericMetadata] = []
         self._token = 0
         self._calls: set[BackgroundCall] = set()
@@ -122,6 +130,9 @@ class SearchPanel(QtWidgets.QWidget):
         self.leSeries.returnPressed.connect(self.search)
         self.leIssue.returnPressed.connect(self._issue_number_changed)
         self.btnSearch.clicked.connect(self.search)
+        self.cbxPublisherFilter = QtWidgets.QCheckBox("Filter publishers")
+        self.cbxPublisherFilter.setToolTip("Hide series from the publishers listed in Settings › Auto-Tag")
+        self.cbxPublisherFilter.toggled.connect(self._show_series)
 
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
@@ -147,6 +158,7 @@ class SearchPanel(QtWidgets.QWidget):
         query.addWidget(self.leSeries, 1)
         query.addWidget(self.leIssue)
         query.addWidget(self.btnSearch)
+        query.addWidget(self.cbxPublisherFilter)
 
         lists = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         lists.addWidget(self.seriesTable)
@@ -227,6 +239,9 @@ class SearchPanel(QtWidgets.QWidget):
         self.year = year
         self.leSeries.setText(series_name)
         self.leIssue.setText(issue_number)
+        self.cbxPublisherFilter.blockSignals(True)
+        self.cbxPublisherFilter.setChecked(config.Auto_Tag__use_publisher_filter)
+        self.cbxPublisherFilter.blockSignals(False)
         self._clear_results()
         if series_name.strip():
             self.search()
@@ -314,6 +329,8 @@ class SearchPanel(QtWidgets.QWidget):
 
     def _clear_results(self) -> None:
         self.series = []
+        self._found = []
+        self._hidden = 0
         self.issues = []
         self._loaded_series_id = None
         self.seriesTable.setRowCount(0)
@@ -332,11 +349,30 @@ class SearchPanel(QtWidgets.QWidget):
                 sort_by_year=self.config.Issue_Identifier__sort_series_by_year,
                 exact_matches_first=self.config.Issue_Identifier__exact_series_matches_first,
             )
+        self._found = series
+        self._show_series()
+
+    def _show_series(self) -> None:
+        """List the results, leaving out filtered publishers while the filter is ticked."""
+        series = self._found
+        if self.cbxPublisherFilter.isChecked() and self.config is not None:
+            series = filter_publishers(series, self.config.Auto_Tag__publisher_filter)
+        found_all = self._found
+        if found_all:
+            self._token += 1  # an issue list still loading belongs to the old rows
+        self._clear_results()
+        self._found = found_all
         self.series = series
-        if not series:
+        hidden = self._hidden = len(found_all) - len(series)
+        if not found_all:
             self.status.setText("No series found. Try a shorter or different name.")
             return
-        self.status.setText(f"{len(series)} series found. Pick one, then pick the issue.")
+        if not series:
+            self.status.setText(
+                f"All {hidden} series found are from filtered publishers. Untick “Filter publishers” to see them."
+            )
+            return
+        self.status.setText(f"{len(series)} series found. Pick one, then pick the issue.{self._hidden_note()}")
         self._fill(
             self.seriesTable,
             [
@@ -353,6 +389,11 @@ class SearchPanel(QtWidgets.QWidget):
             ],
         )
         self.seriesTable.setCurrentCell(0, 0)
+
+    def _hidden_note(self) -> str:
+        if not self._hidden:
+            return ""
+        return f" {self._hidden} series hidden by the publisher filter."
 
     def _series_changed(self, row: int, _col: int, prev_row: int, _prev_col: int) -> None:
         series = self.current_series()
@@ -383,9 +424,10 @@ class SearchPanel(QtWidgets.QWidget):
         self.issues = issues
         series = self.current_series()
         if not issues:
-            self.status.setText("This series has no issues listed. Pick another series.")
+            self.status.setText(f"This series has no issues listed. Pick another series.{self._hidden_note()}")
             return
-        self.status.setText(f"{len(issues)} issues in {series.name if series else 'this series'}.")
+        name = series.name if series else "this series"
+        self.status.setText(f"{len(issues)} issues in {name}.{self._hidden_note()}")
         rows: list[tuple[object, list[tuple[str, object]]]] = []
         for issue in issues:
             date = f"{issue.year or '????'}" + (f"-{int(issue.month):02d}" if issue.month else "")
